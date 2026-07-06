@@ -1,124 +1,80 @@
-"""Local History & Aggregates view -- everything is read straight from SQLite."""
-
-from datetime import date, timedelta
-
+"""
+Historical Consumption Logging Workspace View.
+Displays structural row timelines with inline item deletion triggers.
+"""
 import flet as ft
 
-from app.state import AppState
+def build_history_view(page: ft.Page, state) -> ft.View:
+    # 1. Force state to grab fresh database timelines
+    if hasattr(state, "refresh_logs"):
+        state.refresh_logs()
+        
+    daily_logs = state.get_daily_logs() if hasattr(state, "get_daily_logs") else getattr(state, "logs", [])
 
+    # Container container reference layout to refresh list state dynamically
+    history_list = ft.Column(spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
 
-def build_history_view(page: ft.Page, state: AppState) -> ft.View:
-    days = [date.today() - timedelta(days=i) for i in range(6, -1, -1)]
-    daily_totals = [(d, state.db.get_totals_for_date(d)) for d in days]
-    max_cal = max((t["calories"] for _, t in daily_totals), default=0) or state.goals.daily_calories
+    def delete_item(entry_id, card_control):
+        # 1. Fire execution block against SQLite/AppState layer
+        if hasattr(state, "remove_log"):
+            state.remove_log(entry_id)
+            
+        # 2. Animate out or immediately drop control from active visual layout tree
+        history_list.controls.remove(card_control)
+        if not history_list.controls:
+            history_list.controls.append(ft.Text("No historical logging events saved.", color="#7A8B9E", size=13))
+            
+        page.update()
 
-    bar_groups = []
-    for i, (d, totals) in enumerate(daily_totals):
-        is_today = d == date.today()
-        bar_groups.append(
-            ft.BarChartGroup(
-                x=i,
-                bar_rods=[
-                    ft.BarChartRod(
-                        from_y=0,
-                        to_y=totals["calories"],
-                        width=22,
-                        color=ft.Colors.DEEP_ORANGE if is_today else ft.Colors.DEEP_ORANGE_200,
-                        border_radius=6,
-                        tooltip=f"{totals['calories']} kcal",
-                    )
-                ],
-            )
-        )
+    # 2. Map row cards into control stacks dynamically
+    if not daily_logs:
+        history_list.controls.append(ft.Text("No historical logging events saved.", color="#7A8B9E", size=13))
+    else:
+        for log in daily_logs:
+            # Handle class instance variables or dict mappings safely
+            entry_id = log.get("id") if isinstance(log, dict) else getattr(log, "id", None)
+            meal_name = log.get("meal_name") if isinstance(log, dict) else getattr(log, "meal_name", "Logged Item")
+            cal = log.get("calories") if isinstance(log, dict) else getattr(log, "calories", 0)
+            pro = log.get("protein") if isinstance(log, dict) else getattr(log, "protein", 0)
+            carb = log.get("carbs") if isinstance(log, dict) else getattr(log, "carbs", 0)
+            fat = log.get("fat") if isinstance(log, dict) else getattr(log, "fat", 0)
 
-    chart = ft.BarChart(
-        bar_groups=bar_groups,
-        border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT),
-        left_axis=ft.ChartAxis(labels_size=36),
-        bottom_axis=ft.ChartAxis(
-            labels=[
-                ft.ChartAxisLabel(
-                    value=i,
-                    label=ft.Text(d.strftime("%a"), size=10),
+            # Build structural container reference closure block
+            item_card = ft.Container(padding=12, border_radius=10, bgcolor="#181D26", border=ft.border.all(1, "#222A35"))
+            
+            item_card.content = ft.Row([
+                ft.Column([
+                    ft.Text(meal_name, weight="bold", size=15),
+                    ft.Text(f"{cal} kcal • P{pro}g C{carb}g F{fat}g", size=12, color="#7A8B9E")
+                ], expand=True),
+                ft.IconButton(
+                    icon=ft.Icons.DELETE_OUTLINE,
+                    icon_color="#FF5252",
+                    tooltip="Delete log entry",
+                    # Pass context reference hooks into execution pipeline click handlers
+                    on_click=lambda e, eid=entry_id, card=item_card: delete_item(eid, card)
                 )
-                for i, (d, _) in enumerate(daily_totals)
-            ],
-        ),
-        horizontal_grid_lines=ft.ChartGridLines(
-            interval=max(1, round(max_cal / 4)), color=ft.Colors.OUTLINE_VARIANT, width=1
-        ),
-        max_y=max_cal * 1.2 if max_cal else 100,
-        interactive=True,
-        height=180,
-    )
-
-    all_dates = state.db.get_recent_dates(limit=30)
-    sections = []
-    for d_str in all_dates:
-        entries = state.db.get_logs_for_date(date.fromisoformat(d_str))
-        totals = state.db.get_totals_for_date(date.fromisoformat(d_str))
-        sections.append(
-            ft.Column(
-                [
-                    ft.Row(
-                        [
-                            ft.Text(d_str, weight=ft.FontWeight.W_600, size=13),
-                            ft.Text(
-                                f"{totals['calories']} kcal  •  P{totals['protein']} C{totals['carbs']} F{totals['fat']}",
-                                size=12,
-                                color=ft.Colors.ON_SURFACE_VARIANT,
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
-                    *[
-                        ft.ListTile(
-                            dense=True,
-                            title=ft.Text(e.meal_name, size=13),
-                            subtitle=ft.Text(
-                                f"{e.calories} kcal • P{e.protein} C{e.carbs} F{e.fat}", size=11
-                            ),
-                            trailing=ft.IconButton(
-                                ft.Icons.DELETE_OUTLINE,
-                                icon_size=18,
-                                on_click=lambda ev, log_id=e.id: on_delete(log_id),
-                            ),
-                        )
-                        for e in entries
-                    ],
-                    ft.Divider(),
-                ],
-                spacing=2,
-            )
-        )
-
-    log_list = ft.Column(sections, spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
-
-    def on_delete(log_id: int):
-        state.db.delete_log(log_id)
-        page.go("/history")  # rebuild the view with fresh data
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+            
+            history_list.controls.append(item_card)
 
     return ft.View(
         route="/history",
         controls=[
             ft.AppBar(
-                title=ft.Text("History"),
-                leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: page.go("/")),
+                title=ft.Text("Logging History", weight="bold"),
+                leading=ft.IconButton(content=ft.Icon(ft.Icons.ARROW_BACK), on_click=lambda e: page.go("/")),
+                bgcolor="#181D26"
             ),
             ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text("Last 7 days", size=13, color=ft.Colors.ON_SURFACE_VARIANT),
-                        chart,
-                        ft.Divider(),
-                        ft.Text("All logged days", weight=ft.FontWeight.W_600),
-                        log_list,
-                    ],
-                    spacing=12,
-                    expand=True,
-                ),
+                content=ft.Column([
+                    ft.Text("Manage Your Logs", size=18, weight="bold"),
+                    ft.Text("Review or remove consumption track items recorded to your SQL local instance profile.", size=12, color="#7A8B9E"),
+                    ft.Divider(color="#222A35", height=20),
+                    history_list
+                ], expand=True),
                 padding=20,
-                expand=True,
-            ),
-        ],
+                expand=True
+            )
+        ]
     )

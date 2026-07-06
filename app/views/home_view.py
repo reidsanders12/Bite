@@ -1,139 +1,162 @@
-"""Home / dashboard view -- daily progress + the three logging entry points."""
+"""
+Main Home Dashboard View.
+Displays daily macro progress and provides navigation shortcuts for logging,
+lookup, and profile-contained preferences management.
+"""
 
 import flet as ft
-
 from app.state import AppState
-from app.views.widgets import macro_ring
 
 
 def build_home_view(page: ft.Page, state: AppState) -> ft.View:
-    totals = state.db.get_totals_for_date()
-    goals = state.goals
+    # 1. Force state to fetch the absolute latest records from the DB right now
+    if hasattr(state, "refresh_logs"):
+        state.refresh_logs()
 
-    rings = ft.Row(
-        [
-            macro_ring("Calories", totals["calories"], goals.daily_calories, ft.Colors.DEEP_ORANGE, unit=""),
-            macro_ring("Protein", totals["protein"], goals.daily_protein, ft.Colors.BLUE),
-            macro_ring("Carbs", totals["carbs"], goals.daily_carbs, ft.Colors.AMBER),
-            macro_ring("Fat", totals["fat"], goals.daily_fat, ft.Colors.PURPLE),
-        ],
-        alignment=ft.MainAxisAlignment.SPACE_EVENLY,
-    )
+    daily_logs = []
+    if hasattr(state, "get_daily_logs"):
+        daily_logs = state.get_daily_logs()
+    elif hasattr(state, "logs"):
+        daily_logs = state.logs
 
-    def action_card(icon, title, subtitle, route, color):
-        return ft.Container(
-            content=ft.Row(
-                [
-                    ft.Container(
-                        content=ft.Icon(icon, color=color, size=26),
-                        bgcolor=ft.Colors.with_opacity(0.12, color),
-                        border_radius=12,
-                        padding=12,
-                    ),
-                    ft.Column(
-                        [
-                            ft.Text(title, weight=ft.FontWeight.W_600, size=15),
-                            ft.Text(subtitle, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
-                        ],
-                        spacing=2,
-                        expand=True,
-                    ),
-                    ft.Icon(ft.Icons.CHEVRON_RIGHT, color=ft.Colors.ON_SURFACE_VARIANT),
-                ],
-                spacing=14,
-            ),
-            padding=16,
-            border_radius=16,
-            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-            on_click=lambda e: page.go(route),
-            ink=True,
-        )
+    goals = None
+    if hasattr(state, "get_goals"):
+        goals = state.get_goals()
+    elif hasattr(state, "goals"):
+        goals = state.goals
 
-    recent = state.db.get_logs_for_date()
-    recent_list = (
-        ft.Column(
-            [
-                ft.ListTile(
-                    leading=ft.Icon(
-                        {
-                            "photo": ft.Icons.PHOTO_CAMERA,
-                            "text": ft.Icons.EDIT_NOTE,
-                            "barcode": ft.Icons.QR_CODE_SCANNER,
-                        }.get(entry.source, ft.Icons.RESTAURANT),
-                    ),
-                    title=ft.Text(entry.meal_name),
-                    subtitle=ft.Text(
-                        f"{entry.calories} kcal • P{entry.protein} C{entry.carbs} F{entry.fat} • "
-                        f"{entry.logged_at[11:16]}"
-                    ),
-                )
-                for entry in recent[:5]
-            ]
+    # 2. Extract values defensively supporting both Class Objects and Dictionaries
+    consumed_cal = 0
+    consumed_protein = 0
+    consumed_carbs = 0
+    consumed_fat = 0
+
+    for log in (daily_logs or []):
+        try:
+            # Try parsing as an object attribute first, fallback to dictionary key lookup
+            c = getattr(log, "calories", None) if not isinstance(log, dict) else log.get("calories")
+            p = getattr(log, "protein", None) if not isinstance(log, dict) else log.get("protein")
+            ch = getattr(log, "carbs", None) if not isinstance(log, dict) else log.get("carbs")
+            f = getattr(log, "fat", None) if not isinstance(log, dict) else log.get("fat")
+
+            # Force parse values to integers to handle numeric string records safely
+            consumed_cal += int(c or 0)
+            consumed_protein += int(p or 0)
+            consumed_carbs += int(ch or 0)
+            consumed_fat += int(f or 0)
+        except Exception:
+            pass # Skip corrupted rows cleanly
+
+    # Parse target metrics defensively
+    target_cal = int(getattr(goals, "daily_calories", 2000) if not isinstance(goals, dict) else goals.get("daily_calories", 2000))
+    target_protein = int(getattr(goals, "daily_protein", 150) if not isinstance(goals, dict) else goals.get("daily_protein", 150))
+    target_carbs = int(getattr(goals, "daily_carbs", 200) if not isinstance(goals, dict) else goals.get("daily_carbs", 200))
+    target_fat = int(getattr(goals, "daily_fat", 65) if not isinstance(goals, dict) else goals.get("daily_fat", 65))
+
+    # Calculate current visual progress percentage
+    cal_progress = min(1.0, consumed_cal / max(1, target_cal))
+
+    # Action Shortcuts Buttons
+    logging_shortcuts = ft.Row([
+        ft.ElevatedButton(
+            text="Scan Barcode",
+            icon=getattr(ft.Icons, "BARCODE_READER", getattr(ft.Icons, "UPC_SCAN", ft.Icons.CAMERA)),
+            style=ft.ButtonStyle(bgcolor="#222A35", color=ft.Colors.WHITE),
+            on_click=lambda e: page.go("/lookup"),
+            expand=True
+        ),
+        ft.ElevatedButton(
+            text="Snap Meal",
+            icon=ft.Icons.CAMERA_ALT,
+            style=ft.ButtonStyle(bgcolor="#00E5FF", color="#181D26"),
+            on_click=lambda e: page.go("/snap"),
+            expand=True
         )
-        if recent
-        else ft.Container(
-            content=ft.Text(
-                "No meals logged yet today. Snap a photo to get started!",
-                color=ft.Colors.ON_SURFACE_VARIANT,
-                italic=True,
-            ),
-            padding=16,
-        )
+    ], spacing=10)
+
+    # Progress Ring UI Card Component Block
+    progress_rings = ft.Container(
+        content=ft.Column([
+            ft.Row([
+                ft.Text("Daily Progress", weight="bold", size=16),
+                ft.Text(f"{consumed_cal} / {target_cal} kcal", color="#00E5FF", weight="semibold")
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.ProgressBar(value=cal_progress, color="#00E5FF", bgcolor="#222A35", height=10),
+            ft.Row([
+                _macro_indicator("Protein", consumed_protein, target_protein, "#FF5252"),
+                _macro_indicator("Carbs", consumed_carbs, target_carbs, "#4CAF50"),
+                _macro_indicator("Fat", consumed_fat, target_fat, "#FFC107"),
+            ], alignment=ft.MainAxisAlignment.SPACE_AROUND)
+        ], spacing=14),
+        padding=16,
+        border_radius=12,
+        bgcolor="#181D26"
     )
 
     return ft.View(
         route="/",
         controls=[
             ft.AppBar(
-                title=ft.Text("Macro Tracker", weight=ft.FontWeight.BOLD),
-                center_title=False,
-                bgcolor=ft.Colors.SURFACE,
+                title=ft.Text("Bite Tracker", weight="bold"),
+                leading=ft.IconButton(
+                    content=ft.Icon(ft.Icons.ACCOUNT_CIRCLE, color="#00E5FF"),
+                    on_click=lambda e: page.go("/profile")
+                ),
                 actions=[
-                    ft.IconButton(ft.Icons.SETTINGS_OUTLINED, on_click=lambda e: page.go("/settings")),
+                    ft.IconButton(
+                        content=ft.Icon(ft.Icons.HISTORY),
+                        on_click=lambda e: page.go("/history")
+                    )
                 ],
+                bgcolor="#181D26"
             ),
             ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Text("Today", size=13, color=ft.Colors.ON_SURFACE_VARIANT),
-                        rings,
-                        ft.Container(height=8),
-                        action_card(
-                            ft.Icons.PHOTO_CAMERA,
-                            "Snap & Log",
-                            "Take a photo, AI estimates macros instantly",
-                            "/snap",
-                            ft.Colors.DEEP_ORANGE,
-                        ),
-                        action_card(
-                            ft.Icons.EDIT_NOTE,
-                            "Describe a Meal",
-                            'e.g. "100g oats, a scoop of whey"',
-                            "/text-log",
-                            ft.Colors.BLUE,
-                        ),
-                        action_card(
-                            ft.Icons.QR_CODE_SCANNER,
-                            "Barcode / Ingredient Lookup",
-                            "Free databases: Open Food Facts, USDA",
-                            "/lookup",
-                            ft.Colors.TEAL,
-                        ),
-                        ft.Container(height=8),
-                        ft.Row(
-                            [
-                                ft.Text("Today's Log", weight=ft.FontWeight.W_600),
-                                ft.TextButton("Full history", on_click=lambda e: page.go("/history")),
-                            ],
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        ),
-                        recent_list,
-                    ],
-                    spacing=14,
-                    scroll=ft.ScrollMode.AUTO,
-                ),
+                content=ft.Column([
+                    logging_shortcuts,
+                    progress_rings,
+                    ft.Divider(color="#222A35"),
+                    ft.Text("Today's Timeline", weight="semibold", size=14),
+                    ft.Column(
+                        controls=[
+                            ft.Text("No items logged yet today.", size=12, color="#7A8B9E")
+                        ] if not daily_logs else [
+                            ft.ListTile(
+                                title=ft.Text(
+                                    getattr(log, "meal_name", "Logged Food") if not isinstance(log, dict) else log.get("meal_name", "Logged Food")
+                                ),
+                                subtitle=ft.Text(
+                                    f"{getattr(log, 'calories', 0) if not isinstance(log, dict) else log.get('calories', 0)} kcal • "
+                                    f"P{getattr(log, 'protein', 0) if not isinstance(log, dict) else log.get('protein', 0)}g "
+                                    f"C{getattr(log, 'carbs', 0) if not isinstance(log, dict) else log.get('carbs', 0)}g "
+                                    f"F{getattr(log, 'fat', 0) if not isinstance(log, dict) else log.get('fat', 0)}g"
+                                )
+                            ) for log in daily_logs
+                        ]
+                    )
+                ], spacing=18, scroll=ft.ScrollMode.AUTO),
                 padding=20,
-                expand=True,
-            ),
-        ],
+                expand=True
+            )
+        ]
     )
+
+
+def _macro_indicator(label: str, current: float, target: float, color: str) -> ft.Control:
+    percentage = current / max(1, target)
+    return ft.Column([
+        ft.Text(label, size=11, color="#7A8B9E"),
+        ft.Container(
+            content=ft.Text(f"{int(current)}g", size=12, weight="bold"),
+            padding=4
+        ),
+        ft.Container(
+            width=50,
+            height=4,
+            bgcolor="#222A35",
+            border_radius=2,
+            content=ft.Row([
+                ft.Container(width=max(2, 50 * min(1.0, percentage)), height=4, bgcolor=color, border_radius=2)
+            ])
+        ),
+        ft.Text(f"of {int(target)}g", size=10, color="#506173")
+    ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)

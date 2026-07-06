@@ -3,25 +3,27 @@ Client-side AI engine.
 
 Every call in this file runs the Gemini request directly from the user's own
 device using their own free-tier API key (read from the GEMINI_API_KEY
-environment variable, set via the Settings view). There is no proxy server
+environment variable, loaded instantly from app.config). There is no proxy server
 in between -- this is the piece that makes "$0 infrastructure at scale"
 possible: Google, not us, pays for (and rate-limits) the inference.
 
-We NEVER accept free-form conversational text back from the model. Every
-request sets response_mime_type="application/json" and passes the
-MacroBreakdown Pydantic model directly as response_schema, so the SDK
-validates and parses the structured output for us before it ever reaches
-the UI layer.
+We NEVER accept free-form conversational text back from the food analysis models. 
+Requests set response_mime_type="application/json" and pass the MacroBreakdown 
+Pydantic model directly as response_schema. The AI Coach utilizes a standard 
+text generation stream wrapped with local context injection.
 """
 
 import os
-
 from google import genai
 from google.genai import types
 
-from app.models import MacroBreakdown
+from app.models import MacroBreakdown, UserGoals
 
 MODEL_NAME = "gemini-2.5-flash"
+
+class AIEngineError(Exception):
+    """Raised on structural validation failures or API errors."""
+
 
 _SYSTEM_PROMPT = (
     "You are a precise nutrition-estimation assistant embedded in a calorie "
@@ -39,66 +41,66 @@ _IMAGE_INSTRUCTION = (
 )
 
 _TEXT_INSTRUCTION_TEMPLATE = (
-    "Parse the following natural-language food log into a macro breakdown. "
-    "Treat each mentioned food/quantity as one identified item.\n\n"
-    'User log: "{text}"'
+    "Parse the following natural-language description of a meal or ingredient. "
+    "Identify individual items and calculate an accurate aggregated macro breakdown:\n\n"
+    "\"\"\"\n{text}\n\"\"\""
+)
+
+_COACH_SYSTEM_PROMPT = (
+    "You are an elite sports nutritionist and personal fitness trainer. "
+    "You are direct, highly supportive, evidence-based, and concise. "
+    "You have full access to the user's current daily macro stats and target goals. "
+    "Provide actionable advice, programming tweaks, or recipe ideas based on their actual day. "
+    "Always wrap nutritional or training data points clearly."
 )
 
 
-class AIEngineError(Exception):
-    """Raised for any missing-key / network / parsing failure talking to Gemini."""
-
-
 def _get_client() -> genai.Client:
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    """Initializes the standard asynchronous client with the configuration key."""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        raise AIEngineError(
-            "No Gemini API key configured. Add your free API key in Settings "
-            "to enable AI photo and text logging."
-        )
+        raise AIEngineError("Gemini API key missing. Please verify your app/config.py settings.")
     return genai.Client(api_key=api_key)
 
 
 def _config() -> types.GenerateContentConfig:
+    """Shared rigid configuration template for the structured food analysis workflows."""
     return types.GenerateContentConfig(
         system_instruction=_SYSTEM_PROMPT,
+        temperature=0.2,
         response_mime_type="application/json",
         response_schema=MacroBreakdown,
     )
 
 
 def _extract(response: types.GenerateContentResponse) -> MacroBreakdown:
-    # The SDK will populate `.parsed` automatically when response_schema is a
-    # Pydantic model and the model's JSON validates against it.
-    if getattr(response, "parsed", None) is not None:
-        return response.parsed
-    # Fall back to manual validation in case `.parsed` isn't populated for
-    # any SDK-version reason -- response.text is still guaranteed JSON.
+    """Safely un-wraps and validates JSON structures returning an absolute data model."""
+    txt = response.text
+    if not txt:
+        raise AIEngineError("Gemini returned an empty response.")
     try:
-        return MacroBreakdown.model_validate_json(response.text)
-    except Exception as exc:  # noqa: BLE001 - surfaced to the user as a friendly error
+        return MacroBreakdown.model_validate_json(txt)
+    except Exception as exc:
         raise AIEngineError(
             f"Gemini returned a response that couldn't be parsed as a macro breakdown: {exc}"
         ) from exc
 
 
-async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> MacroBreakdown:
-    """Send a food photo to Gemini Flash and get back a structured macro breakdown."""
-    client = _get_client()
-    try:
-        response = await client.aio.models.generate_content(
-            model=MODEL_NAME,
-            contents=[
-                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                _IMAGE_INSTRUCTION,
-            ],
-            config=_config(),
-        )
-    except AIEngineError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise AIEngineError(f"Gemini request failed: {exc}") from exc
-    return _extract(response)
+# ------------------------------------------------------------- CORE ANALYSIS LOGS
+
+# Inside app/services/ai_engine.py
+async def analyze_image(self, photo_bytes: bytes):
+    from google.genai import types
+
+    # Standard flat list containing your text and image parts
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=[
+            types.Part.from_bytes(data=photo_bytes, mime_type="image/jpeg"),
+            "Analyze the food items in this photo and return their estimated calorie, protein, carb, and fat metrics."
+        ]
+    )
+    return response
 
 
 async def analyze_text(text: str) -> MacroBreakdown:
@@ -113,6 +115,53 @@ async def analyze_text(text: str) -> MacroBreakdown:
         )
     except AIEngineError:
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         raise AIEngineError(f"Gemini request failed: {exc}") from exc
     return _extract(response)
+
+
+# ----------------------------------------------------------------- AI COACH SYSTEM
+
+async def chat_with_coach(
+    user_message: str, 
+    history: list, 
+    totals: dict, 
+    goals: UserGoals
+) -> str:
+    """Runs a free conversational fitness consultation directly on the client device.
+    
+    Injects local database macro state directly to give the AI context on their day.
+    """
+    client = _get_client()
+    
+    # 1. Synthesize current fitness context from SQLite data
+    context_prefix = (
+        f"[CURRENT LOGGED STATS FOR TODAY]:\n"
+        f"- Calories Consumed: {totals['calories']} / Target: {goals.daily_calories} kcal\n"
+        f"- Protein Consumed: {totals['protein']}g / Target: {goals.daily_protein}g\n"
+        f"- Carbs Consumed: {totals['carbs']}g / Target: {goals.daily_carbs}g\n"
+        f"- Fat Consumed: {totals['fat']}g / Target: {goals.daily_fat}g\n\n"
+        f"Answer the user's question with these metrics explicitly in mind."
+    )
+    
+    # 2. Build explicit conversation history for Gemini API
+    contents = []
+    for turn in history[-6:]:  # Rolling memory window to keep context tight and fast
+        role = "user" if turn["is_user"] else "model"
+        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=turn["text"])]))
+        
+    # Append the newest message with the injected local context header
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=f"{context_prefix}\n\nUser: {user_message}")]))
+    
+    try:
+        response = await client.aio.models.generate_content(
+            model=MODEL_NAME,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=_COACH_SYSTEM_PROMPT,
+                temperature=0.7
+            )
+        )
+        return response.text if response.text else "Coach couldn't process that response."
+    except Exception as exc:
+        raise AIEngineError(f"Trainer chat failed: {exc}") from exc

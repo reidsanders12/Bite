@@ -1,67 +1,105 @@
-"""
-Multimodal AI Macro Tracker -- entry point.
-
-Run with:  flet run main.py          (desktop)
-       or: flet run main.py --web    (browser)
-       or: flet build apk/ipa        (native mobile, once you're ready to ship)
-
-Architecture recap (see PRODUCT_BRIEF for the full rationale):
-  - All AI calls (Gemini) and food-database lookups (Open Food Facts, USDA)
-    happen directly from this client using the user's own free-tier keys.
-  - All persistence (goals + food log history) is local SQLite.
-  - There is no backend server anywhere in this codebase.
-"""
-
+import traceback
 import flet as ft
 
+# 1. IMPORT CONFIG FIRST AND LOAD IT IMMEDIATELY
 from app import config
+config.load_into_environment()
+
 from app.state import AppState
+from app.views.auth_view import build_auth_view
+from app.views.coach_view import build_coach_view
 from app.views.confirm_view import build_confirm_view
 from app.views.history_view import build_history_view
 from app.views.home_view import build_home_view
 from app.views.lookup_view import build_lookup_view
 from app.views.settings_view import build_settings_view
 from app.views.snap_view import build_snap_view
+from app.views.survey_view import build_survey_view
 from app.views.text_log_view import build_text_log_view
+from app.views.profile_view import build_profile_view
 
+# 2. Append it cleanly inside your VIEW_BUILDERS map allocation table
 VIEW_BUILDERS = {
+    "/auth": build_auth_view,
+    "/": build_home_view,
+    "/profile": build_profile_view,  # <-- Profile view wired into the app engine
     "/snap": build_snap_view,
     "/confirm": build_confirm_view,
-    "/text-log": build_text_log_view,
     "/history": build_history_view,
-    "/settings": build_settings_view,
     "/lookup": build_lookup_view,
+    "/settings": build_settings_view,
+    "/survey": build_survey_view,
+    "/text_log": build_text_log_view,
+    "/coach": build_coach_view,
 }
 
-
 def main(page: ft.Page):
-    page.title = "Macro Tracker"
-    page.theme_mode = ft.ThemeMode.SYSTEM
-    page.window.width = 420
-    page.window.height = 860
-
-    config.load_into_environment()
+    page.title = "Bite"
+    page.theme_mode = ft.ThemeMode.DARK
+    
+    # 3. INITIALIZE STATE CORRECTLY
+    # Letting the default_factory handle the inner Database connection link assignment
     state = AppState()
 
-    def route_change(e: ft.RouteChangeEvent):
-        page.views.clear()
-        page.views.append(build_home_view(page, state))
+    def route_change(e):
+            print(f"Routing to active scene viewport target: {page.route}")
+            
+            # CRITICAL FIX: Explicitly clear the layout views completely 
+            # so Flet cannot use a stale, cached copy of the homepage layout
+            page.views.clear()
+            
+            try:
+                # Force refresh the data arrays inside your state context right now
+                if hasattr(state, "refresh_logs"):
+                    state.refresh_logs()
+                if hasattr(state, "refresh_goals"):
+                    state.refresh_goals()
 
-        if page.route != "/":
-            builder = VIEW_BUILDERS.get(page.route)
-            if builder is not None:
-                page.views.append(builder(page, state))
+                # Dynamically look up and rebuild the requested view layout
+                builder = VIEW_BUILDERS.get(page.route)
+                
+                if builder:
+                    # Passing the fresh state instantly triggers new math calculations inside home_view!
+                    page.views.append(builder(page, state))
+                else:
+                    page.views.append(build_home_view(page, state))
+                    
+            except Exception as err:
+                print("!!! ROUTING CRASH ENCOUNTERED !!!")
+                traceback.print_exc()
+                
+                page.views.append(
+                    ft.View(
+                        route="/error",
+                        controls=[
+                            ft.AppBar(title=ft.Text("App Initialization Error")),
+                            ft.Container(
+                                content=ft.Column([
+                                    ft.Text("Failed to build view component safely.", color=ft.Colors.ERROR, weight="bold"),
+                                    ft.Text(f"Error Details: {str(err)}", size=12),
+                                    ft.ElevatedButton("Force Reset to Auth Screen", on_click=lambda _: page.go("/auth"))
+                                ]),
+                                padding=20
+                            )
+                        ]
+                    )
+                )
+                
+            page.update()
 
-        page.update()
+    def view_pop(e):
+        if len(page.views) > 1:
+            page.views.pop()
+            top_view = page.views[-1]
+            page.go(top_view.route)
 
-    def view_pop(e: ft.ViewPopEvent):
-        page.views.pop()
-        top_view = page.views[-1]
-        page.go(top_view.route)
-
+    # Wire navigation state pipeline notification hooks
     page.on_route_change = route_change
     page.on_view_pop = view_pop
-    page.go(page.route)
+    
+    # Trigger the primary bootstrap layout painting thread execution sequence.
+    # Boots directly to /auth so users can sign in or create an account.
+    page.go(page.route if page.route and page.route != "/" else "/auth")
 
 
 if __name__ == "__main__":
