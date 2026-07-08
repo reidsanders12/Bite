@@ -1,11 +1,10 @@
 import traceback
 import flet as ft
 
-# 1. IMPORT CONFIG FIRST AND LOAD IT IMMEDIATELY
+# 1. IMPORT CONFIG FIRST (It loads everything into the environment automatically on import)
 from app import config
-config.load_into_environment()
 
-from app.state import AppState
+from app import AppState
 from app.views.auth_view import build_auth_view
 from app.views.coach_view import build_coach_view
 from app.views.confirm_view import build_confirm_view
@@ -22,7 +21,7 @@ from app.views.profile_view import build_profile_view
 VIEW_BUILDERS = {
     "/auth": build_auth_view,
     "/": build_home_view,
-    "/profile": build_profile_view,  # <-- Profile view wired into the app engine
+    "/profile": build_profile_view,  
     "/snap": build_snap_view,
     "/confirm": build_confirm_view,
     "/history": build_history_view,
@@ -38,14 +37,12 @@ def main(page: ft.Page):
     page.theme_mode = ft.ThemeMode.DARK
     
     # 3. INITIALIZE STATE CORRECTLY
-    # Letting the default_factory handle the inner Database connection link assignment
     state = AppState()
 
     def route_change(e):
             print(f"Routing to active scene viewport target: {page.route}")
             
-            # CRITICAL FIX: Explicitly clear the layout views completely 
-            # so Flet cannot use a stale, cached copy of the homepage layout
+            # Explicitly clear the layout views completely 
             page.views.clear()
             
             try:
@@ -59,7 +56,6 @@ def main(page: ft.Page):
                 builder = VIEW_BUILDERS.get(page.route)
                 
                 if builder:
-                    # Passing the fresh state instantly triggers new math calculations inside home_view!
                     page.views.append(builder(page, state))
                 else:
                     page.views.append(build_home_view(page, state))
@@ -97,7 +93,6 @@ def main(page: ft.Page):
     page.on_route_change = route_change
     page.on_view_pop = view_pop
     
-    # Trigger the primary bootstrap layout painting thread execution sequence.
     # Boots directly to /auth so users can sign in or create an account.
     page.go(page.route if page.route and page.route != "/" else "/auth")
 

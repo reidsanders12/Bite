@@ -1,62 +1,59 @@
-"""
-Tiny local config file for API keys.
-
-We keep this separate from the SQLite DB since it's read once at startup
-before anything else needs the database. Keys are written to a plain JSON
-file in the user's home directory and mirrored into os.environ so
-app.ai_engine / app.food_apis (which read from the environment) pick them up
-immediately without any extra plumbing.
-"""
-
-import json
 import os
-from pathlib import Path
-from typing import Optional
+from google import genai
 
-CONFIG_PATH = Path.home() / ".macro_tracker" / "config.json"
+# 1. Manually calculate the absolute path to your root folder
+current_dir = os.path.dirname(os.path.abspath(__file__))
+root_dir = os.path.abspath(os.path.join(current_dir, ".."))
+env_path = os.path.join(root_dir, ".env")
 
-# ---------------------------------------------------------------- HARDCODED KEYS
-# Put your real API keys inside the strings below
-HARDCODED_GEMINI_KEY = "AQ.Ab8RN6IBEWaFTLtSEHdQbyvvageUDUCLbNQlt4eiwFNGKePPqQ"
-HARDCODED_USDA_KEY = "DEMO_KEY"
+print(f"[RAW ENV DEBUG] Checking path: {env_path}")
 
+# 2. Raw File Inspection Loop
+if os.path.exists(env_path):
+    print("[RAW ENV DEBUG] File found! Reading lines manually...")
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            
+            # Split lines manually to clear out spaces and hidden quotes
+            if "=" in line:
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip().strip("'").strip('"')
+                
+                # Dynamically force-inject it into the environment dictionary
+                os.environ[key] = val
+                print(f" -> Successfully parsed key manually: '{key}'")
+else:
+    print(f"[RAW ENV DEBUG] CRITICAL: .env file completely missing from {root_dir}")
 
-def load_into_environment() -> None:
-    """Load saved keys from disk into os.environ (called once at app startup)."""
-    # 1. First inject your hardcoded keys so they work right out of the box
-    if HARDCODED_GEMINI_KEY:
-        os.environ["GEMINI_API_KEY"] = HARDCODED_GEMINI_KEY
-    if HARDCODED_USDA_KEY:
-        os.environ["USDA_API_KEY"] = HARDCODED_USDA_KEY
+# 3. Read back your key allocations
+ai_key = os.getenv("GEMINI_API_KEY")
+usda_key = os.getenv("USDA_API_KEY")
 
-    # 2. Fallback: Read from disk if the user overrides them or has a config file
-    if not CONFIG_PATH.exists():
-        return
-    try:
-        data = json.loads(CONFIG_PATH.read_text())
-    except (json.JSONDecodeError, OSError):
-        return
-        
-    for key in ("GEMINI_API_KEY", "USDA_API_KEY"):
-        value = data.get(key)
-        if value and value.strip():
-            os.environ[key] = value
+if not ai_key:
+    raise ValueError(
+        f"[Config Engine] CRITICAL ERROR: GEMINI_API_KEY is still not set!\n"
+        f"Please verify that your file contains a line that looks exactly like:\n"
+        f"GEMINI_API_KEY=your_actual_key_here\n"
+        f"Current path checked: {env_path}"
+    )
 
+# Initialize your client cleanly
+client = genai.Client(api_key=ai_key)
 
-def get_saved_key(key: str) -> Optional[str]:
-    """Retrieves the active key from the system environment."""
-    return os.environ.get(key, "")
+# 4. Read and validate your Supabase keys
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    raise ValueError(
+        "[Config Engine] CRITICAL ERROR: SUPABASE_URL or SUPABASE_ANON_KEY missing."
+    )
 
-def save_key(key: str, value: str) -> None:
-    """Saves a modified key to local storage and mirrors it into the session."""
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    data = {}
-    if CONFIG_PATH.exists():
-        try:
-            data = json.loads(CONFIG_PATH.read_text())
-        except (json.JSONDecodeError, OSError):
-            data = {}
-    data[key] = value
-    CONFIG_PATH.write_text(json.dumps(data, indent=2))
-    os.environ[key] = value
+SUPABASE_URL = SUPABASE_URL.strip()
+SUPABASE_ANON_KEY = SUPABASE_ANON_KEY.strip()
+
+print("[CONFIG DEBUG] All keys loaded and verified cleanly via manual parser fallback!")

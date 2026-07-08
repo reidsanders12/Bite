@@ -14,6 +14,8 @@ text generation stream wrapped with local context injection.
 """
 
 import os
+import json
+from typing import List
 from google import genai
 from google.genai import types
 
@@ -37,7 +39,7 @@ _SYSTEM_PROMPT = (
 _IMAGE_INSTRUCTION = (
     "Analyze the food shown in this photo. Identify each distinct food item, "
     "estimate its portion size, and produce one aggregated macro breakdown "
-    "for the entire plate/meal shown."
+    "for the entire plate/meal shown. Provide an appropriate descriptive meal_name."
 )
 
 _TEXT_INSTRUCTION_TEMPLATE = (
@@ -56,7 +58,7 @@ _COACH_SYSTEM_PROMPT = (
 
 
 def _get_client() -> genai.Client:
-    """Initializes the standard asynchronous client with the configuration key."""
+    """Initializes the standard client with the configuration key."""
     api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
         raise AIEngineError("Gemini API key missing. Please verify your app/config.py settings.")
@@ -88,19 +90,26 @@ def _extract(response: types.GenerateContentResponse) -> MacroBreakdown:
 
 # ------------------------------------------------------------- CORE ANALYSIS LOGS
 
-# Inside app/services/ai_engine.py
-async def analyze_image(self, photo_bytes: bytes):
-    from google.genai import types
-
-    # Standard flat list containing your text and image parts
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
-        contents=[
-            types.Part.from_bytes(data=photo_bytes, mime_type="image/jpeg"),
-            "Analyze the food items in this photo and return their estimated calorie, protein, carb, and fat metrics."
-        ]
-    )
-    return response
+async def analyze_image(photo_bytes: bytes) -> MacroBreakdown:
+    """Send raw photo bytes to Gemini asynchronously for strict Pydantic parsing."""
+    client = _get_client()
+    try:
+        # Construct the official binary Part object required by the new SDK
+        image_part = types.Part.from_bytes(
+            data=photo_bytes,
+            mime_type="image/jpeg"
+        )
+        
+        # Use your native async pipeline wrapper (.aio)
+        response = await client.aio.models.generate_content(
+            model=MODEL_NAME,
+            contents=[image_part, _IMAGE_INSTRUCTION],
+            config=_config() # Uses your rigorous predefined Pydantic schema rule
+        )
+    except Exception as exc:
+        raise AIEngineError(f"Gemini multimodal photo request failed: {exc}") from exc
+        
+    return _extract(response)
 
 
 async def analyze_text(text: str) -> MacroBreakdown:
@@ -116,7 +125,7 @@ async def analyze_text(text: str) -> MacroBreakdown:
     except AIEngineError:
         raise
     except Exception as exc:
-        raise AIEngineError(f"Gemini request failed: {exc}") from exc
+        raise AIEngineError(f"Gemini text request failed: {exc}") from exc
     return _extract(response)
 
 
@@ -134,7 +143,7 @@ async def chat_with_coach(
     """
     client = _get_client()
     
-    # 1. Synthesize current fitness context from SQLite data
+    # 1. Synthesize current fitness context from cloud database metrics
     context_prefix = (
         f"[CURRENT LOGGED STATS FOR TODAY]:\n"
         f"- Calories Consumed: {totals['calories']} / Target: {goals.daily_calories} kcal\n"
