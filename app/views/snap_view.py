@@ -1,6 +1,7 @@
 """Camera snapshot layout module."""
 import flet as ft
 import asyncio
+from app import theme
 from app.camera_engine import CameraEngine
 from app import ai_engine
 
@@ -13,11 +14,11 @@ def build_snap_view(page: ft.Page, state) -> ft.View:
         width=320,
         height=320,
         fit=ft.ImageFit.COVER,
-        border_radius=12
+        border_radius=theme.RADIUS_MD,
     )
 
-    status_txt = ft.Text("Camera Ready", size=12, color=ft.Colors.ON_SURFACE_VARIANT)
-    
+    status_txt = ft.Text("Camera Ready", size=12, color=theme.TEXT_MUTED)
+
     # Context loop handler wrapping the async execution thread
 # Pass the stream function directly into Flet's background task runner
     def start_capture_loop():
@@ -56,16 +57,23 @@ def build_snap_view(page: ft.Page, state) -> ft.View:
 
     return ft.View(
         route="/snap",
+        bgcolor=theme.BG_CANVAS,
         controls=[
-            ft.AppBar(title=ft.Text("Snap Meal Photo"), leading=ft.IconButton(content=ft.Icon(ft.Icons.ARROW_BACK), on_click=handle_back)),
+            theme.app_bar("Snap Meal Photo", on_back=handle_back),
             ft.Container(
                 content=ft.Column([
-                    ft.Container(content=view_stream, alignment=ft.alignment.center, bgcolor="#11151C", border_radius=12),
+                    ft.Container(
+                        content=view_stream,
+                        alignment=ft.alignment.center,
+                        bgcolor=theme.BG_SURFACE,
+                        border=ft.border.all(1, theme.BORDER),
+                        border_radius=theme.RADIUS_MD,
+                    ),
                     status_txt,
                     ft.Row([
-                        ft.FilledButton(text="Capture Photo", icon=ft.Icons.CAMERA_ALT, on_click=on_snap_click)
+                        theme.primary_button("Capture Photo", icon=ft.Icons.CAMERA_ALT, on_click=on_snap_click)
                     ], alignment=ft.MainAxisAlignment.CENTER)
-                ], spacing=20),
+                ], spacing=20, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=20
             )
         ]

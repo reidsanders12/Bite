@@ -15,13 +15,17 @@ text generation stream wrapped with local context injection.
 
 import os
 import json
+import asyncio
 from typing import List
 from google import genai
-from google.genai import types
+from google.genai import types, errors
 
 from app.models import MacroBreakdown, UserGoals
 
 MODEL_NAME = "gemini-2.5-flash"
+
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY_SECONDS = 2
 
 class AIEngineError(Exception):
     """Raised on structural validation failures or API errors."""
@@ -75,6 +79,17 @@ def _config() -> types.GenerateContentConfig:
     )
 
 
+async def _generate_with_retry(client: genai.Client, **kwargs) -> types.GenerateContentResponse:
+    """Calls generate_content, retrying on transient 503 (model overloaded) errors."""
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return await client.aio.models.generate_content(**kwargs)
+        except errors.ServerError:
+            if attempt == _MAX_RETRIES - 1:
+                raise
+            await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * (2 ** attempt))
+
+
 def _extract(response: types.GenerateContentResponse) -> MacroBreakdown:
     """Safely un-wraps and validates JSON structures returning an absolute data model."""
     txt = response.text
@@ -100,8 +115,9 @@ async def analyze_image(photo_bytes: bytes) -> MacroBreakdown:
             mime_type="image/jpeg"
         )
         
-        # Use your native async pipeline wrapper (.aio)
-        response = await client.aio.models.generate_content(
+        # Use your native async pipeline wrapper (.aio), retrying transient 503s
+        response = await _generate_with_retry(
+            client,
             model=MODEL_NAME,
             contents=[image_part, _IMAGE_INSTRUCTION],
             config=_config() # Uses your rigorous predefined Pydantic schema rule
@@ -117,7 +133,8 @@ async def analyze_text(text: str) -> MacroBreakdown:
     client = _get_client()
     prompt = _TEXT_INSTRUCTION_TEMPLATE.format(text=text)
     try:
-        response = await client.aio.models.generate_content(
+        response = await _generate_with_retry(
+            client,
             model=MODEL_NAME,
             contents=prompt,
             config=_config(),

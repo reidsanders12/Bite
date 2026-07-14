@@ -1,35 +1,37 @@
 import flet as ft
+from app import theme
 from app.state import AppState
 from app.ai_engine import chat_with_coach
 
-# ---------------------------------------------------------------- DESIGN SYSTEM TOKENS
-BG_CANVAS = "#0E1116"       # Deep Midnight Matte Black
-BG_SURFACE = "#181D26"      # Structural Slate Gray
-BG_INPUT = "#222A35"        # Text Input Background
-COLOR_ACCENT = "#00E5FF"    # Electric Cyan
-COLOR_PROTEIN = "#4CAF50"   # Neon Mint Green
-COLOR_CARBS = "#FF9100"     # Electric Amber
-COLOR_FAT = "#FF3D00"       # Radical Crimson Red
+# Local aliases kept so the rest of this file reads the same as before,
+# now backed by the app-wide tokens in app/theme.py instead of one-off hex.
+BG_CANVAS = theme.BG_CANVAS
+BG_SURFACE = theme.BG_SURFACE
+BG_INPUT = theme.BG_SURFACE_ALT
+COLOR_ACCENT = theme.ACCENT
+COLOR_PROTEIN = theme.PROTEIN
+COLOR_CARBS = theme.CARBS
+COLOR_FAT = theme.FAT
 
 def create_macro_ring(label: str, consumed: int, target: int, color: str) -> ft.Container:
     """Renders a modern, flat dashboard indicator metric card."""
     percent = min(consumed / max(target, 1), 1.0)
     return ft.Container(
         content=ft.Column([
-            ft.Text(label, size=12, color="#7A8B9E", weight=ft.FontWeight.W_600),
+            ft.Text(label, size=12, color=theme.TEXT_MUTED, weight=ft.FontWeight.W_600),
             ft.Stack([
-                ft.ProgressRing(value=percent, stroke_width=6, color=color, bgcolor="#2D3748", width=64, height=64),
+                ft.ProgressRing(value=percent, stroke_width=6, color=color, bgcolor=theme.BG_SURFACE_ALT, width=64, height=64),
                 ft.Container(
-                    content=ft.Text(f"{consumed}g", size=11, weight="bold", color="#FFFFFF"),
+                    content=ft.Text(f"{consumed}g", size=11, weight="bold", color=theme.TEXT_PRIMARY),
                     alignment=ft.alignment.center,
                     width=64, height=64
                 )
             ]),
-            ft.Text(f"Target: {target}g", size=10, color="#7A8B9E")
+            ft.Text(f"Target: {target}g", size=10, color=theme.TEXT_MUTED)
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
         bgcolor=BG_SURFACE,
         padding=14,
-        border_radius=16,
+        border_radius=theme.RADIUS_MD,
         expand=True
     )
 
@@ -43,23 +45,23 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.Container:
     chat_list = ft.ListView(expand=True, spacing=12, padding=10, auto_scroll=True)
     chat_input = ft.TextField(
         hint_text="Ask about programming, recovery, recipes...",
-        hint_style=ft.TextStyle(color="#7A8B9E"),
+        hint_style=ft.TextStyle(color=theme.TEXT_MUTED),
         bgcolor=BG_INPUT,
-        border_color=ft.colors.TRANSPARENT,
+        border_color=ft.Colors.TRANSPARENT,
         focused_border_color=COLOR_ACCENT,
-        border_radius=12,
+        border_radius=theme.RADIUS_SM,
         expand=True,
-        text_style=ft.TextStyle(color="#FFFFFF"),
+        text_style=ft.TextStyle(color=theme.TEXT_PRIMARY),
     )
-    
+
     # Load past database logs to keep current session preserved
     saved_history = state.db.get_chat_history()
-    
+
     def render_bubble(text: str, is_user: bool):
         return ft.Row(
             controls=[
                 ft.Container(
-                    content=ft.Text(text, color="#FFFFFF", size=14),
+                    content=ft.Text(text, color=theme.TEXT_PRIMARY, size=14),
                     bgcolor=BG_INPUT if is_user else BG_SURFACE,
                     padding=14,
                     border_radius=ft.border_radius.only(
@@ -117,42 +119,43 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.Container:
             # Dashboard Title Header
             ft.Row([
                 ft.Column([
-                    ft.Text("MIND COACH", size=24, weight=ft.FontWeight.W_900, color="#FFFFFF"),
-                    ft.Text("On-device AI Nutritionist & Trainer", size=12, color="#7A8B9E", italic=True),
+                    ft.Text("MIND COACH", size=24, weight=ft.FontWeight.W_900, color=theme.TEXT_PRIMARY),
+                    ft.Text("On-device AI Nutritionist & Trainer", size=12, color=theme.TEXT_MUTED, italic=True),
                 ]),
                 ft.IconButton(
-                    icon=ft.icons.ARROW_BACK_IOS_NEW_ROUNDED, 
+                    icon=ft.Icons.ARROW_BACK_IOS_NEW_ROUNDED,
                     icon_color=COLOR_ACCENT,
                     on_click=lambda _: page.go("/")
                 )
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-            
-            ft.Divider(color="#222A35", height=10),
-            
+
+            ft.Divider(color=theme.BORDER, height=10),
+
             # Interactive Macro Context Rows pulled from local state
             ft.Row([
                 create_macro_ring("PROTEIN", totals["protein"], goals.daily_protein, COLOR_PROTEIN),
                 create_macro_ring("CARBS", totals["carbs"], goals.daily_carbs, COLOR_CARBS),
                 create_macro_ring("FAT", totals["fat"], goals.daily_fat, COLOR_FAT),
             ], spacing=10),
-            
-            ft.Divider(color="#222A35", height=15),
-            
+
+            ft.Divider(color=theme.BORDER, height=15),
+
             # Main Message Thread Frame
             ft.Container(
                 content=chat_list,
                 expand=True,
-                bgcolor="#11161F",
-                border_radius=16,
+                bgcolor=theme.BG_CANVAS,
+                border=ft.border.all(1, theme.BORDER),
+                border_radius=theme.RADIUS_MD,
                 padding=10,
             ),
-            
+
             # Message Input Section
             ft.Row([
                 chat_input,
                 ft.FloatingActionButton(
                     bgcolor=COLOR_ACCENT,
-                    content=ft.Icon(ft.icons.SEND, color=BG_CANVAS, size=16),
+                    content=ft.Icon(ft.Icons.SEND, color=theme.ACCENT_ON, size=16),
                     on_click=send_message
                 )
             ], spacing=10)

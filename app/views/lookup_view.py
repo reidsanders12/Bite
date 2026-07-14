@@ -7,6 +7,7 @@ import asyncio
 import flet as ft
 
 from app import food_apis
+from app import theme
 from app.state import AppState
 from app.views.widgets import error_banner, loading_view
 from app.views.snap_view import camera_manager  # Centralized camera helper engine
@@ -23,33 +24,28 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
 
     # 1. UI Declarations
     barcode_field = ft.TextField(
-        label="Barcode (UPC/EAN)", 
-        hint_text="e.g. 3017620422003", 
-        border_radius=12,
-        border_color="#1C2431",
-        focused_border_color="#00E5FF",
+        label="Barcode (UPC/EAN)",
+        hint_text="e.g. 3017620422003",
+        **theme.styled_field(),
     )
-    
+
     usda_field = ft.TextField(
-        label="Ingredient name", 
-        hint_text="e.g. chicken breast, raw", 
-        border_radius=12,
-        border_color="#1C2431",
-        focused_border_color="#00E5FF",
+        label="Ingredient name",
+        hint_text="e.g. chicken breast, raw",
+        **theme.styled_field(),
     )
-    
+
     barcode_stream_view = ft.Image(
-        width=320, 
-        height=200, 
-        fit=ft.ImageFit.COVER, 
-        border_radius=12,
+        width=320,
+        height=200,
+        fit=ft.ImageFit.COVER,
+        border_radius=theme.RADIUS_MD,
         visible=False
     )
-    
-    scan_btn = ft.FilledButton(
-        text="Live Scan Barcode", 
-        icon=ft.Icons.CAMERA_ALT_ROUNDED, 
-        style=ft.ButtonStyle(bgcolor="#00E5FF", color="#0A0E17"),
+
+    scan_btn = theme.primary_button(
+        "Live Scan Barcode",
+        icon=ft.Icons.CAMERA_ALT_ROUNDED,
         on_click=lambda e: toggle_barcode_camera()
     )
 
@@ -59,7 +55,7 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         code = barcode_field.value.strip()
         if not code:
             return
-            
+
         results_area.controls = [loading_view("Querying Open Food Facts database...")]
         page.update()
         try:
@@ -76,7 +72,7 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         query = usda_field.value.strip()
         if not query:
             return
-            
+
         results_area.controls = [loading_view("Searching USDA FoodData Index...")]
         page.update()
         try:
@@ -104,14 +100,14 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         if not camera_active[0]:
             camera_active[0] = True
             scan_btn.text = "Stop Scanner"
-            scan_btn.style = ft.ButtonStyle(bgcolor="#FF5252", color="#FFFFFF")
+            scan_btn.style = ft.ButtonStyle(bgcolor=theme.ERROR, color=theme.TEXT_PRIMARY)
             barcode_stream_view.visible = True
             page.update()
-            
+
             page.run_task(
-                camera_manager.stream_views, 
-                barcode_stream_view, 
-                "barcode", 
+                camera_manager.stream_views,
+                barcode_stream_view,
+                "barcode",
                 handle_detected_barcode
             )
         else:
@@ -121,7 +117,7 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         if camera_active[0]:
             camera_active[0] = False
             scan_btn.text = "Live Scan Barcode"
-            scan_btn.style = ft.ButtonStyle(bgcolor="#00E5FF", color="#0A0E17")
+            scan_btn.style = ft.ButtonStyle(bgcolor=theme.ACCENT, color=theme.ACCENT_ON)
             barcode_stream_view.visible = False
             camera_manager.stop_camera()
             page.update()
@@ -131,10 +127,10 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         return ft.Column(
             [
                 ft.Row([
-                    ft.Container(barcode_field, expand=True), 
+                    ft.Container(barcode_field, expand=True),
                     ft.IconButton(
-                        icon=ft.Icons.SEARCH_ROUNDED, 
-                        icon_color="#00E5FF", 
+                        icon=ft.Icons.SEARCH_ROUNDED,
+                        icon_color=theme.ACCENT,
                         on_click=lambda e: page.run_task(on_barcode_search, e)
                     )
                 ], spacing=5),
@@ -144,7 +140,7 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
                 ft.Text(
                     "Looks up packaged products via Open Food Facts api mappings.",
                     size=11,
-                    color="#506173",
+                    color=theme.TEXT_FAINT,
                 ),
             ],
             spacing=10,
@@ -154,17 +150,17 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         return ft.Column(
             [
                 ft.Row([
-                    ft.Container(usda_field, expand=True), 
+                    ft.Container(usda_field, expand=True),
                     ft.IconButton(
-                        icon=ft.Icons.SEARCH_ROUNDED, 
-                        icon_color="#00E5FF", 
+                        icon=ft.Icons.SEARCH_ROUNDED,
+                        icon_color=theme.ACCENT,
                         on_click=lambda e: page.run_task(on_usda_search, e)
                     )
                 ], spacing=5),
                 ft.Text(
                     "Looks up raw ingredient databases via USDA FoodData Central (normalized values per 100g base sample scale).",
                     size=11,
-                    color="#506173",
+                    color=theme.TEXT_FAINT,
                 ),
             ],
             spacing=10,
@@ -176,24 +172,24 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
     def update_tab_ui():
         stop_barcode_camera()
         results_area.controls = []
-        
+
         if current_tab[0] == 0:
-            tab_barcode_btn.bgcolor = "#222A35"
-            tab_barcode_btn.border = ft.border.all(1, "#00E5FF")
-            tab_barcode_btn.content.controls[0].color = "#00E5FF"
-            
+            tab_barcode_btn.bgcolor = theme.BG_SURFACE_ALT
+            tab_barcode_btn.border = ft.border.all(1, theme.ACCENT)
+            tab_barcode_btn.content.controls[0].color = theme.ACCENT
+
             tab_usda_btn.bgcolor = "transparent"
             tab_usda_btn.border = None
-            tab_usda_btn.content.controls[0].color = "#7A8B9E"
+            tab_usda_btn.content.controls[0].color = theme.TEXT_MUTED
             tabs_content.content = build_barcode_tab()
         else:
-            tab_usda_btn.bgcolor = "#222A35"
-            tab_usda_btn.border = ft.border.all(1, "#00E5FF")
-            tab_usda_btn.content.controls[0].color = "#00E5FF"
-            
+            tab_usda_btn.bgcolor = theme.BG_SURFACE_ALT
+            tab_usda_btn.border = ft.border.all(1, theme.ACCENT)
+            tab_usda_btn.content.controls[0].color = theme.ACCENT
+
             tab_barcode_btn.bgcolor = "transparent"
             tab_barcode_btn.border = None
-            tab_barcode_btn.content.controls[0].color = "#7A8B9E"
+            tab_barcode_btn.content.controls[0].color = theme.TEXT_MUTED
             tabs_content.content = build_usda_tab()
 
     def switch_tabs(target_index: int):
@@ -206,36 +202,37 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
     # 5. Component Construction Wiring
     tab_barcode_btn.content = ft.Row([ft.Text("Barcode Product", weight="bold")], alignment=ft.MainAxisAlignment.CENTER)
     tab_barcode_btn.padding = 12
-    tab_barcode_btn.border_radius = 10
+    tab_barcode_btn.border_radius = theme.RADIUS_SM
     tab_barcode_btn.on_click = lambda _: switch_tabs(0)
 
     tab_usda_btn.content = ft.Row([ft.Text("Ingredient Index", weight="bold")], alignment=ft.MainAxisAlignment.CENTER)
     tab_usda_btn.padding = 12
-    tab_usda_btn.border_radius = 10
+    tab_usda_btn.border_radius = theme.RADIUS_SM
     tab_usda_btn.on_click = lambda _: switch_tabs(1)
 
     custom_tabs_bar = ft.Container(
         content=ft.Row([tab_barcode_btn, tab_usda_btn], spacing=5),
-        bgcolor="#181D26",
+        bgcolor=theme.BG_SURFACE,
         padding=6,
-        border_radius=12,
+        border_radius=theme.RADIUS_SM,
     )
 
     update_tab_ui()
 
     return ft.View(
         route="/lookup",
-        bgcolor="#06090F",
+        bgcolor=theme.BG_CANVAS,
         controls=[
             ft.AppBar(
                 title=ft.Text("GLOBAL INDEX LOOKUP", size=16, weight="bold"),
-                bgcolor="#0A0E17",
-                color="#FFFFFF",
+                bgcolor=theme.BG_CANVAS,
+                color=theme.TEXT_PRIMARY,
+                elevation=0,
                 leading=ft.IconButton(
-                    icon=ft.Icons.ARROW_BACK_IOS_NEW_ROUNDED, 
-                    icon_color="#7A8B9E",
+                    icon=ft.Icons.ARROW_BACK_IOS_NEW_ROUNDED,
+                    icon_color=theme.TEXT_MUTED,
                     on_click=lambda _: [
-                        stop_barcode_camera(), 
+                        stop_barcode_camera(),
                         page.views.clear(),  # Destroys navigation route history references
                         page.go("/")         # Forces clean dashboard view rebuild pipeline
                     ]
@@ -243,7 +240,7 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
             ),
             ft.Container(
                 content=ft.Column(
-                    [custom_tabs_bar, tabs_content, ft.Divider(color="#1C2431", height=20), results_area],
+                    [custom_tabs_bar, tabs_content, ft.Divider(color=theme.BORDER, height=20), results_area],
                     spacing=14,
                     scroll=ft.ScrollMode.AUTO,
                 ),
@@ -268,23 +265,23 @@ def _product_card(product, state: AppState, page: ft.Page) -> ft.Control:
         content=ft.Row(
             [
                 ft.Column(
-                    [ft.Text(product.name.upper(), weight=ft.FontWeight.BOLD, size=14), ft.Text(subtitle, size=12, color="#7A8B9E")],
+                    [ft.Text(product.name.upper(), weight=ft.FontWeight.BOLD, size=14), ft.Text(subtitle, size=12, color=theme.TEXT_MUTED)],
                     expand=True,
                     spacing=4
                 ),
                 ft.IconButton(
-                    icon=ft.Icons.ADD_LINK_ROUNDED, 
-                    icon_color="#00E5FF",
-                    on_click=on_log, 
+                    icon=ft.Icons.ADD_LINK_ROUNDED,
+                    icon_color=theme.ACCENT,
+                    on_click=on_log,
                     tooltip="Stage item parameters"
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN
         ),
         padding=16,
-        border_radius=14,
-        bgcolor="#0A0E17",
-        border=ft.border.all(1, "#1C2431")
+        border_radius=theme.RADIUS_MD,
+        bgcolor=theme.BG_SURFACE,
+        border=ft.border.all(1, theme.BORDER)
     )
 
 
@@ -303,23 +300,23 @@ def _ingredient_card(breakdown, state: AppState, page: ft.Page) -> ft.Control:
                             f"Per 100g: {breakdown.calories} kcal • "
                             f"P: {breakdown.protein}g  C: {breakdown.carbs}g  F: {breakdown.fat}g",
                             size=12,
-                            color="#7A8B9E"
+                            color=theme.TEXT_MUTED
                         ),
                     ],
                     expand=True,
                     spacing=4
                 ),
                 ft.IconButton(
-                    icon=ft.Icons.ADD_LINK_ROUNDED, 
-                    icon_color="#00E5FF", 
-                    on_click=on_log, 
+                    icon=ft.Icons.ADD_LINK_ROUNDED,
+                    icon_color=theme.ACCENT,
+                    on_click=on_log,
                     tooltip="Stage biological matrix"
                 ),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN
         ),
         padding=16,
-        border_radius=14,
-        bgcolor="#0A0E17",
-        border=ft.border.all(1, "#1C2431")
+        border_radius=theme.RADIUS_MD,
+        bgcolor=theme.BG_SURFACE,
+        border=ft.border.all(1, theme.BORDER)
     )

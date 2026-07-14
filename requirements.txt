@@ -1,4 +1,6 @@
 flet==0.28.3
-google-genai==2.10.0
+google-genai==1.47.0
 pydantic==2.13.4
 httpx==0.28.1
+supabase
+opencv-python

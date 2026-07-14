@@ -5,19 +5,21 @@ and ensures a hard refresh layout sweep back to the primary dashboard.
 """
 import flet as ft
 
+from app import theme
+
 def build_confirm_view(page: ft.Page, state) -> ft.View:
     # 1. Safely retrieve the staged Pydantic object from your updated AppState memory
     item = getattr(state, "pending_breakdown", None)
-    
+
     if not item:
         return ft.View(
             route="/confirm",
-            bgcolor="#06090F",
+            bgcolor=theme.BG_CANVAS,
             controls=[
                 ft.Container(
                     content=ft.Column([
-                        ft.Icon(ft.Icons.WARNING_ROUNDED, color="#FF5252", size=48),
-                        ft.Text("No nutritional payload found staged for validation.", color="#FF5252", size=14),
+                        ft.Icon(ft.Icons.WARNING_ROUNDED, color=theme.ERROR, size=48),
+                        ft.Text("No meal to confirm yet.", color=theme.ERROR, size=14),
                         ft.Divider(color="transparent", height=10),
                         ft.TextButton("Return to Dashboard", on_click=lambda _: page.go("/"))
                     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
@@ -40,56 +42,78 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
     else:
         serving_desc = "1 Standard Serving"
 
-    # 3. Dynamic layout typography nodes matching the dark minimalist theme
-    title_txt = ft.Text(meal_name.upper(), size=20, weight="bold")
-    subtitle_txt = ft.Text(f"Estimated Base Unit: {serving_desc}", color="#506173", size=12)
+    # 3. Editable fields so the user can correct what the AI guessed
+    name_field = ft.TextField(
+        value=meal_name,
+        text_align=ft.TextAlign.CENTER,
+        text_size=20,
+        text_style=ft.TextStyle(weight="bold"),
+        **theme.styled_field(),
+    )
+    subtitle_txt = ft.Text(f"Estimated Base Unit: {serving_desc}", color=theme.TEXT_FAINT, size=12)
 
-    calc_calories = ft.Text(f"{base_calories} kcal", size=32, weight="bold", color="#00E5FF")
-    calc_protein = ft.Text(f"Protein: {base_protein}g", size=13, weight="semibold", color="#FF5252")
-    calc_carbs = ft.Text(f"Carbs: {base_carbs}g", size=13, weight="semibold", color="#4CAF50")
-    calc_fat = ft.Text(f"Fat: {base_fat}g", size=13, weight="semibold", color="#FFC107")
+    def _numeric_field(value: int, color: str) -> ft.TextField:
+        return ft.TextField(
+            value=str(value),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            text_align=ft.TextAlign.CENTER,
+            width=110,
+            color=color,
+            **theme.styled_field(),
+        )
 
-    status_msg = ft.Text("", color="#00E5FF", size=12)
+    calories_field = _numeric_field(base_calories, theme.ACCENT)
+    protein_field = _numeric_field(base_protein, theme.PROTEIN)
+    carbs_field = _numeric_field(base_carbs, theme.CARBS)
+    fat_field = _numeric_field(base_fat, theme.FAT)
 
-    # 4. Slider mutation action scales nutritional vectors dynamically
+    status_msg = ft.Text("", color=theme.ACCENT, size=12)
+
+    def _parse_int(value: str, fallback: int) -> int:
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return fallback
+
+    # 4. Slider mutation action scales nutritional vectors dynamically,
+    # overwriting whatever is currently in the editable fields
     def slider_changed(e):
         servings_multiplier = slider.value
         slider_label.value = f"Quantity: {round(servings_multiplier, 2)} servings"
-        
+
         # Multiply baseline numbers by the fractional metric slider positions
-        calc_calories.value = f"{int(base_calories * servings_multiplier)} kcal"
-        calc_protein.value = f"Protein: {int(base_protein * servings_multiplier)}g"
-        calc_carbs.value = f"Carbs: {int(base_carbs * servings_multiplier)}g"
-        calc_fat.value = f"Fat: {int(base_fat * servings_multiplier)}g"
+        calories_field.value = str(int(base_calories * servings_multiplier))
+        protein_field.value = str(int(base_protein * servings_multiplier))
+        carbs_field.value = str(int(base_carbs * servings_multiplier))
+        fat_field.value = str(int(base_fat * servings_multiplier))
         page.update()
 
     # The slider handles fractional steps beautifully (0.1 increments)
     slider = ft.Slider(
-        min=0.1, 
-        max=5.0, 
-        divisions=49,  
-        value=1.0, 
-        label="{value}x servings", 
+        min=0.1,
+        max=5.0,
+        divisions=49,
+        value=1.0,
+        label="{value}x servings",
         on_change=slider_changed,
-        thumb_color="#00E5FF",
-        active_color="#00E5FF"
+        thumb_color=theme.ACCENT,
+        active_color=theme.ACCENT
     )
-    slider_label = ft.Text("Quantity: 1.0 serving", weight="w500", color="#7A8B9E", size=13)
+    slider_label = ft.Text("Quantity: 1.0 serving", weight="w500", color=theme.TEXT_MUTED, size=13)
 
     # 5. Async-wrapped database execution to prevent main event-loop thread blocking
     async def confirm_and_save(e):
         try:
-            status_msg.value = "Synchronizing encrypted database fields..."
+            status_msg.value = "Saving..."
             page.update()
 
-            servings_multiplier = slider.value
-            final_cal = int(base_calories * servings_multiplier)
-            final_pro = int(base_protein * servings_multiplier)
-            final_carb = int(base_carbs * servings_multiplier)
-            final_fat = int(base_fat * servings_multiplier)
-            
-            # Format display string with serving multipliers for cleaner historical logs
-            display_name = f"{meal_name} ({round(servings_multiplier, 1)}x)"
+            # Read directly from the editable fields so manual corrections win
+            final_cal = _parse_int(calories_field.value, base_calories)
+            final_pro = _parse_int(protein_field.value, base_protein)
+            final_carb = _parse_int(carbs_field.value, base_carbs)
+            final_fat = _parse_int(fat_field.value, base_fat)
+
+            display_name = name_field.value.strip() or meal_name
 
             # --- ENGINE WRITE TRANSACTIONS WITH ASYNC WORKER TASK HANDLING ---
             # Using state.log_food handles user auth parsing to clear RLS gates safely
@@ -109,7 +133,7 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
             state.pending_breakdown = None
             state.pending_source = None
 
-            status_msg.value = "Food committed to cloud logs successfully!"
+            status_msg.value = "Logged!"
             page.update()
             
             # --- FLUSH THE VIEW STACK TO FORCE FRESH INLINE RENDERING ---
@@ -119,30 +143,43 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
             page.go("/")
             
         except Exception as err:
-            status_msg.value = f"Cloud Logging Error: {str(err)}"
+            status_msg.value = f"Couldn't save: {str(err)}"
             page.update()
 
     return ft.View(
         route="/confirm",
-        bgcolor="#06090F",
+        bgcolor=theme.BG_CANVAS,
         controls=[
             ft.Container(
                 content=ft.Column([
                     ft.Divider(color="transparent", height=20),
-                    title_txt,
+                    ft.Container(name_field, width=280),
                     subtitle_txt,
-                    ft.Divider(color="#1C2431", height=30),
-                    
-                    calc_calories,
+                    ft.Divider(color=theme.BORDER, height=30),
+
+                    ft.Column(
+                        [ft.Text("Calories (kcal)", size=11, color=theme.TEXT_MUTED), calories_field],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=4,
+                    ),
                     ft.Divider(color="transparent", height=10),
                     ft.Row([
-                        calc_protein,
-                        calc_carbs,
-                        calc_fat
+                        ft.Column(
+                            [ft.Text("Protein (g)", size=11, color=theme.TEXT_MUTED), protein_field],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4,
+                        ),
+                        ft.Column(
+                            [ft.Text("Carbs (g)", size=11, color=theme.TEXT_MUTED), carbs_field],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4,
+                        ),
+                        ft.Column(
+                            [ft.Text("Fat (g)", size=11, color=theme.TEXT_MUTED), fat_field],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4,
+                        ),
                     ], alignment=ft.MainAxisAlignment.CENTER, spacing=20),
-                    
+
                     ft.Divider(color="transparent", height=30),
-                    
+
                     # Intermediary Slider Matrix Container
                     ft.Container(
                         content=ft.Column([
@@ -150,29 +187,24 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
                             slider,
                         ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                         padding=20,
-                        bgcolor="#0A0E17",
-                        border_radius=16,
-                        border=ft.border.all(1, "#1C2431")
+                        bgcolor=theme.BG_SURFACE,
+                        border_radius=theme.RADIUS_MD,
+                        border=ft.border.all(1, theme.BORDER)
                     ),
-                    
+
                     ft.Divider(color="transparent", height=10),
                     status_msg,
                     ft.Divider(color="transparent", height=10),
-                    
-                    ft.FilledButton(
-                        "Log to Timeline", 
-                        icon=ft.Icons.CHECK, 
+
+                    theme.primary_button(
+                        "Log to Timeline",
+                        icon=ft.Icons.CHECK,
                         on_click=lambda e: page.run_task(confirm_and_save, e),  # Explicitly forwarding event e
-                        width=float("inf"), 
-                        style=ft.ButtonStyle(
-                            bgcolor="#00E5FF", 
-                            color="#0A0E17",
-                            shape=ft.RoundedRectangleBorder(radius=12)
-                        )
+                        width=float("inf"),
                     ),
                     ft.TextButton(
-                        "Cancel Entry", 
-                        style=ft.ButtonStyle(color="#7A8B9E"),
+                        "Cancel Entry",
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
                         on_click=lambda _: [
                             setattr(state, "pending_breakdown", None),
                             page.go("/")

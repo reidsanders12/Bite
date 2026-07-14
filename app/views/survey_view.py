@@ -4,6 +4,7 @@ Calculates macro baseline targets and maps localized regional sponsor parameters
 """
 
 import flet as ft
+from app import theme
 from app.models import UserGoals
 
 def build_survey_view(page: ft.Page, state) -> ft.View:
@@ -11,20 +12,20 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
     current_step = 0
 
     # Step 1 Controls: Biometrics
-    age_field = ft.TextField(label="Age (years)", hint_text="e.g. 28", border_radius=10)
+    age_field = ft.TextField(label="Age (years)", hint_text="e.g. 28", **theme.styled_field())
     gender_radio = ft.RadioGroup(
         content=ft.Row([
             ft.Radio(value="male", label="Male"),
             ft.Radio(value="female", label="Female")
         ], alignment=ft.MainAxisAlignment.CENTER)
     )
-    weight_field = ft.TextField(label="Current Weight (kg)", hint_text="e.g. 75", border_radius=10)
-    height_field = ft.TextField(label="Height (cm)", hint_text="e.g. 178", border_radius=10)
+    weight_field = ft.TextField(label="Current Weight (kg)", hint_text="e.g. 75", **theme.styled_field())
+    height_field = ft.TextField(label="Height (cm)", hint_text="e.g. 178", **theme.styled_field())
 
     # Step 2 Controls: Goals & Activity
     activity_dropdown = ft.Dropdown(
         label="Activity Level",
-        border_radius=10,
+        **theme.styled_dropdown(),
         options=[
             ft.dropdown.Option("1.2", "Sedentary (Little or no exercise)"),
             ft.dropdown.Option("1.375", "Lightly Active (1-3 days/week)"),
@@ -45,7 +46,7 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
     # Step 3 Controls: Location & Sponsors
     region_dropdown = ft.Dropdown(
         label="Select Your Region",
-        border_radius=10,
+        **theme.styled_dropdown(),
         options=[
             ft.dropdown.Option("US_EAST", "United States (East Coast)"),
             ft.dropdown.Option("US_WEST", "United States (West Coast)"),
@@ -57,7 +58,7 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
     
     sponsor_display = ft.Column(spacing=10, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
     wizard_content = ft.Container()
-    status_msg = ft.Text("", color=ft.Colors.ERROR, size=12)
+    status_msg = ft.Text("", color=theme.ERROR, size=12)
 
     # Localized Sponsorship Mapping Data Store
     SPONSOR_REGIONS = {
@@ -124,7 +125,7 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
             wizard_content.content = ft.Column([
                 ft.Text("Step 1: Your Biometrics", size=18, weight="bold"),
                 age_field,
-                ft.Text("Gender:", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Gender:", size=12, color=theme.TEXT_MUTED),
                 gender_radio,
                 weight_field,
                 height_field,
@@ -133,7 +134,7 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
             wizard_content.content = ft.Column([
                 ft.Text("Step 2: Activity & Objectives", size=18, weight="bold"),
                 activity_dropdown,
-                ft.Text("Primary Fitness Target Direction:", size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Text("Primary Fitness Target Direction:", size=12, color=theme.TEXT_MUTED),
                 fitness_goal_radio,
             ], spacing=14)
         elif current_step == 2:
@@ -142,23 +143,24 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
             sponsor_display.controls = [
                 ft.Container(
                     content=ft.Column([
-                        ft.Text(deal["name"], weight="bold", size=14, color="#00E5FF"),
-                        ft.Text(deal["desc"], size=12),
+                        ft.Text(deal["name"], weight="bold", size=14, color=theme.ACCENT),
+                        ft.Text(deal["desc"], size=12, color=theme.TEXT_MUTED),
                         ft.Container(
-                            content=ft.Text(f"Code: {deal['promo']}", size=11, weight="bold", color="#181D26"),
-                            bgcolor="#00E5FF", padding=4, border_radius=4
+                            content=ft.Text(f"Code: {deal['promo']}", size=11, weight="bold", color=theme.ACCENT_ON),
+                            bgcolor=theme.ACCENT, padding=4, border_radius=4
                         )
                     ]),
-                    padding=12, border_radius=8, bgcolor="#222A35"
+                    padding=12, border_radius=theme.RADIUS_SM, bgcolor=theme.BG_SURFACE_ALT,
+                    border=ft.border.all(1, theme.BORDER),
                 ) for deal in local_deals
             ]
-            
+
             wizard_content.content = ft.Column([
                 ft.Text("Step 3: Location Matchmaking", size=18, weight="bold"),
-                ft.Text("We leverage your high-level region parameters to populate local discounts.", size=12),
+                ft.Text("We leverage your high-level region parameters to populate local discounts.", size=12, color=theme.TEXT_MUTED),
                 region_dropdown,
-                ft.Divider(color="#222A35"),
-                ft.Text("Exclusive Local Partner Sponsors Available In Your Region:", size=13, weight="semibold"),
+                ft.Divider(color=theme.BORDER),
+                ft.Text("Exclusive Local Partner Sponsors Available In Your Region:", size=13, weight="w600"),
                 sponsor_display,
             ], spacing=14)
 
@@ -201,18 +203,16 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
 
     return ft.View(
         route="/survey",
+        bgcolor=theme.BG_CANVAS,
         controls=[
-            ft.AppBar(
-                title=ft.Text("Setup Onboarding Engine"),
-                leading=ft.IconButton(content=ft.Icon(ft.Icons.ARROW_BACK), on_click=lambda e: page.go("/")),
-            ),
+            theme.app_bar("Setup Onboarding Engine", on_back=lambda e: page.go("/")),
             ft.Container(
                 content=ft.Column([
                     wizard_content,
                     status_msg,
                     ft.Row([
-                        ft.TextButton("Back", on_click=on_prev),
-                        ft.FilledButton("Continue", icon=ft.Icons.NAVIGATE_NEXT, on_click=on_next)
+                        ft.TextButton("Back", style=ft.ButtonStyle(color=theme.TEXT_MUTED), on_click=on_prev),
+                        theme.primary_button("Continue", icon=ft.Icons.NAVIGATE_NEXT, on_click=on_next)
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
                 ], spacing=20, scroll=ft.ScrollMode.AUTO),
                 padding=20,

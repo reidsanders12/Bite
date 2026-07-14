@@ -2,6 +2,7 @@
 Main Home Dashboard View - Modern Minimalist Edition.
 """
 import flet as ft
+from app import theme
 from app.state import AppState
 
 def build_home_view(page: ft.Page, state: AppState) -> ft.View:
@@ -34,72 +35,118 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
     logging_shortcuts = ft.Row([
         ft.Container(
             content=ft.Row([
-                ft.Icon(ft.Icons.SUBTITLES_OUTLINED, size=15), 
+                ft.Icon(ft.Icons.SUBTITLES_OUTLINED, size=15, color=theme.TEXT_PRIMARY),
                 ft.Text("Text Log", size=12, weight="w600")
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
-            bgcolor="#141923", 
-            border=ft.border.all(1, "#222C3F"), 
-            border_radius=24, 
+            bgcolor=theme.BG_SURFACE_ALT,
+            border=ft.border.all(1, theme.BORDER),
+            border_radius=24,
             padding=ft.padding.symmetric(12, 10),
-            on_click=lambda _: page.go("/text_log"), 
+            on_click=lambda _: page.go("/text_log"),
             expand=True
         ),
         ft.Container(
             content=ft.Row([
-                ft.Icon(ft.Icons.SEARCH_ROUNDED, size=15), 
+                ft.Icon(ft.Icons.SEARCH_ROUNDED, size=15, color=theme.TEXT_PRIMARY),
                 ft.Text("Lookup", size=12, weight="w600")
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
-            bgcolor="#141923", 
-            border=ft.border.all(1, "#222C3F"), 
-            border_radius=24, 
+            bgcolor=theme.BG_SURFACE_ALT,
+            border=ft.border.all(1, theme.BORDER),
+            border_radius=24,
             padding=ft.padding.symmetric(12, 10),
-            on_click=lambda _: page.go("/lookup"), 
+            on_click=lambda _: page.go("/lookup"),
             expand=True
         ),
         ft.Container(
             content=ft.Row([
-                ft.Icon(ft.Icons.CAMERA_ALT_OUTLINED, size=15, color="#0A0E17"), 
-                ft.Text("Snap", size=12, weight="bold", color="#0A0E17")
+                ft.Icon(ft.Icons.CAMERA_ALT_OUTLINED, size=15, color=theme.ACCENT_ON),
+                ft.Text("Snap", size=12, weight="bold", color=theme.ACCENT_ON)
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
-            bgcolor="#00E5FF", 
-            border_radius=24, 
+            bgcolor=theme.ACCENT,
+            border_radius=24,
             padding=ft.padding.symmetric(12, 10),
-            on_click=lambda _: page.go("/snap"), 
+            on_click=lambda _: page.go("/snap"),
             expand=True
         )
     ], spacing=10)
 
-    # Clean Glassmorphic Progress Overview Box
-    progress_card = ft.Container(
-        content=ft.Column([
-            ft.Row([
-                ft.Column([
-                    ft.Text("ENERGY CONSUMED", size=11, color="#7A8B9E", weight="w700"),
-                    ft.Text(f"{consumed_cal} kcal", size=32, weight="bold"),
-                ]),
-                ft.Container(
-                    content=ft.Text(f"Target: {target_cal}", size=11, color="#00E5FF", weight="w600"),
-                    bgcolor="#0A2F35", border_radius=8, padding=ft.padding.symmetric(6, 10)
-                )
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.END),
-            ft.ProgressBar(value=cal_progress, color="#00E5FF", bgcolor="#141923", height=6),
-            ft.Divider(color="#1C2431", height=10),
-            ft.Row([
-                _modern_macro("PROTEIN", consumed_pro, target_pro, "#FF5252"),
-                _modern_macro("CARBS", consumed_carb, target_carb, "#4CAF50"),
-                _modern_macro("FAT", consumed_fat, target_fat, "#FFC107"),
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-        ], spacing=16),
-        padding=24, border_radius=20, bgcolor="#0A0E17", border=ft.border.all(1, "#1C2431")
+    # Progress Overview Box: calorie ring gauge + macro meters
+    remaining_cal = max(0, target_cal - consumed_cal)
+    calorie_ring = ft.Stack(
+        [
+            ft.ProgressRing(
+                value=cal_progress, width=132, height=132, stroke_width=12,
+                color=theme.ACCENT, bgcolor=theme.BG_SURFACE_ALT, stroke_cap=ft.StrokeCap.ROUND,
+            ),
+            ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Text(f"{remaining_cal:,}", size=26, weight="bold", color=theme.TEXT_PRIMARY),
+                        ft.Text("Remaining", size=11, color=theme.TEXT_MUTED),
+                    ],
+                    spacing=0,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                width=132, height=132, alignment=ft.alignment.center,
+            ),
+        ],
+        width=132, height=132,
     )
 
-    # Clean Timeline Build List
-    timeline_items = ft.Column(spacing=10)
+    calorie_breakdown = ft.Column(
+        [
+            ft.Row(
+                [ft.Icon(ft.Icons.FLAG_OUTLINED, size=16, color=theme.TEXT_MUTED),
+                 ft.Text("Goal", size=13, color=theme.TEXT_MUTED, expand=True),
+                 ft.Text(f"{target_cal:,}", size=13, weight="w600", color=theme.TEXT_PRIMARY)],
+                spacing=8,
+            ),
+            ft.Row(
+                [ft.Icon(ft.Icons.RESTAURANT_OUTLINED, size=16, color=theme.TEXT_MUTED),
+                 ft.Text("Food", size=13, color=theme.TEXT_MUTED, expand=True),
+                 ft.Text(f"{consumed_cal:,}", size=13, weight="w600", color=theme.TEXT_PRIMARY)],
+                spacing=8,
+            ),
+        ],
+        spacing=12,
+        width=150,
+    )
+
+    progress_card = ft.Container(
+        content=ft.Column([
+            ft.Text("Calories", size=17, weight="bold", color=theme.TEXT_PRIMARY),
+            ft.Text("Remaining = Goal − Food", size=12, color=theme.TEXT_FAINT),
+            ft.Row(
+                [calorie_ring, calorie_breakdown],
+                alignment=ft.MainAxisAlignment.SPACE_AROUND,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.Divider(color=theme.BORDER, height=1),
+            ft.Row([
+                _modern_macro("PROTEIN", consumed_pro, target_pro, theme.PROTEIN),
+                _modern_macro("CARBS", consumed_carb, target_carb, theme.CARBS),
+                _modern_macro("FAT", consumed_fat, target_fat, theme.FAT),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+        ], spacing=18),
+        padding=26, border_radius=theme.RADIUS_LG, bgcolor=theme.BG_SURFACE,
+        border=ft.border.all(1, theme.BORDER), shadow=theme.CARD_SHADOW,
+    )
+
+    # Timeline Build List
+    timeline_items = ft.Column(spacing=12)
     if not daily_logs:
         timeline_items.controls.append(
             ft.Container(
-                content=ft.Text("No entries recorded for today.", color="#506173", size=13, italic=True),
-                padding=10
+                content=ft.Column(
+                    [
+                        ft.Icon(ft.Icons.RESTAURANT_ROUNDED, color=theme.TEXT_FAINT, size=28),
+                        ft.Text("No entries recorded for today.", color=theme.TEXT_FAINT, size=13, italic=True),
+                    ],
+                    spacing=10,
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=28,
+                alignment=ft.alignment.center,
             )
         )
     else:
@@ -114,43 +161,65 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 ft.Container(
                     content=ft.Row([
                         ft.Column([
-                            ft.Text(name, size=14, weight="w600"),
-                            ft.Text(f"P {p}g   C {ch}g   F {f}g", size=11, color="#7A8B9E")
-                        ], expand=True),
-                        ft.Text(f"+{c} kcal", size=14, weight="bold", color="#00E5FF")
-                    ]),
-                    padding=16, border_radius=14, bgcolor="#0A0E17", border=ft.border.all(1, "#141923")
+                            ft.Text(name, size=15, weight="w600"),
+                            ft.Row(
+                                [
+                                    _macro_chip("P", p, theme.PROTEIN),
+                                    _macro_chip("C", ch, theme.CARBS),
+                                    _macro_chip("F", f, theme.FAT),
+                                ],
+                                spacing=10,
+                            ),
+                        ], expand=True, spacing=6),
+                        ft.Text(f"+{c:,}", size=16, weight="bold", color=theme.ACCENT)
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    padding=18, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE,
+                    border=ft.border.all(1, theme.BORDER), shadow=theme.CARD_SHADOW,
                 )
             )
 
     return ft.View(
         route="/",
-        bgcolor="#06090F", # Absolute Midnight Background
+        bgcolor=theme.BG_CANVAS,
         controls=[
             ft.AppBar(
                 title=ft.Text("Bite Profile", size=18, weight="bold"),
-                leading=ft.IconButton(icon=ft.Icons.ACCOUNT_CIRCLE_OUTLINED, icon_color="#7A8B9E", on_click=lambda _: page.go("/profile")),
-                actions=[ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_color="#7A8B9E", on_click=lambda _: page.go("/history"))],                
-                bgcolor="#06090F", elevation=0
+                leading=ft.IconButton(icon=ft.Icons.ACCOUNT_CIRCLE_OUTLINED, icon_color=theme.TEXT_MUTED, on_click=lambda _: page.go("/profile")),
+                actions=[ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_color=theme.TEXT_MUTED, on_click=lambda _: page.go("/history"))],
+                bgcolor=theme.BG_CANVAS, elevation=0
             ),
             ft.Container(
                 content=ft.Column([
                     progress_card,
-                    ft.Divider(color="transparent", height=10),
+                    ft.Divider(color="transparent", height=4),
                     logging_shortcuts,
-                    ft.Divider(color="transparent", height=10),
-                    ft.Text("TODAY'S LINEUP", size=11, color="#506173", weight="w700"),
+                    ft.Divider(color="transparent", height=4),
+                    ft.Text("TODAY'S LINEUP", size=11, color=theme.TEXT_FAINT, weight="w700"),
                     timeline_items
-                ], spacing=12, scroll=ft.ScrollMode.AUTO),
-                padding=20, expand=True
+                ], spacing=18, scroll=ft.ScrollMode.AUTO),
+                padding=ft.padding.symmetric(20, 24), expand=True
             )
         ]
     )
 
 def _modern_macro(label: str, cur: int, tgt: int, accent_color: str) -> ft.Control:
     return ft.Column([
-        ft.Text(label, size=10, color="#506173", weight="bold"),
-        ft.Text(f"{cur}/{tgt}g", size=13, weight="w600"),
-        ft.Container(width=40, height=3, bgcolor="#141923", border_radius=2, 
-                     content=ft.Row([ft.Container(width=min(40, 40*(cur/max(1,tgt))), height=3, bgcolor=accent_color)]))
-    ], spacing=4)
+        ft.Text(label, size=10, color=theme.TEXT_FAINT, weight="bold"),
+        ft.Text(f"{cur}g", size=15, weight="bold"),
+        ft.Text(f"of {tgt}g", size=10, color=theme.TEXT_MUTED),
+        ft.ProgressBar(
+            value=min(1.0, cur / max(1, tgt)), width=76, height=6,
+            color=accent_color, bgcolor=ft.Colors.with_opacity(0.15, accent_color),
+            border_radius=3,
+        ),
+    ], spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+
+def _macro_chip(letter: str, grams: int, color: str) -> ft.Control:
+    return ft.Row(
+        [
+            ft.Container(width=8, height=8, border_radius=4, bgcolor=color),
+            ft.Text(f"{letter} {grams}g", size=11, color=theme.TEXT_MUTED),
+        ],
+        spacing=5,
+    )

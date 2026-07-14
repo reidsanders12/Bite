@@ -10,6 +10,7 @@ platform-specific and left as a TODO -- see comment below).
 import flet as ft
 
 from app import ai_engine
+from app import theme
 from app.state import AppState
 from app.views.widgets import error_banner, loading_view
 
@@ -21,11 +22,11 @@ def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
         multiline=True,
         min_lines=3,
         max_lines=6,
-        border_radius=12,
         autofocus=True,
+        **theme.styled_field(),
     )
     status_area = ft.Container()
-    submit_button = ft.FilledButton("Parse with AI", icon=ft.Icons.AUTO_AWESOME)
+    submit_button = theme.primary_button("Parse with AI", icon=ft.Icons.AUTO_AWESOME)
 
     def on_mic_click(e):
         # Hook point for native speech-to-text (e.g. platform channel / plugin).
@@ -61,12 +62,10 @@ def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
     submit_button.on_click = on_submit
 
     return ft.View(
-        route="/text-log",
+        route="/text_log",
+        bgcolor=theme.BG_CANVAS,
         controls=[
-            ft.AppBar(
-                title=ft.Text("Describe a Meal"),
-                leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: page.go("/")),
-            ),
+            theme.app_bar("Describe a Meal", on_back=lambda e: page.go("/")),
             ft.Container(
                 content=ft.Column(
                     [
@@ -75,6 +74,7 @@ def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
                                 ft.Container(text_field, expand=True),
                                 ft.IconButton(
                                     ft.Icons.MIC_NONE,
+                                    icon_color=theme.TEXT_MUTED,
                                     tooltip="Dictate (uses your keyboard's mic)",
                                     on_click=on_mic_click,
                                 ),

@@ -3,8 +3,9 @@ import flet as ft
 
 # 1. IMPORT CONFIG FIRST (It loads everything into the environment automatically on import)
 from app import config
+from app import theme
 
-from app import AppState
+from app.state import AppState
 from app.views.auth_view import build_auth_view
 from app.views.coach_view import build_coach_view
 from app.views.confirm_view import build_confirm_view
@@ -34,8 +35,10 @@ VIEW_BUILDERS = {
 
 def main(page: ft.Page):
     page.title = "Bite"
-    page.theme_mode = ft.ThemeMode.DARK
-    
+    page.theme_mode = ft.ThemeMode.LIGHT
+    page.theme = theme.build_theme()
+    page.bgcolor = theme.BG_CANVAS
+
     # 3. INITIALIZE STATE CORRECTLY
     state = AppState()
 

@@ -41,7 +41,7 @@ class AppState:
                 return
 
             user_id = user_res.user.id
-            res = self.db.table("food_logs").select("*").eq("user_id", user_id).order("created_at", descending=True).execute()
+            res = self.db.table("food_logs").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
             
             self.daily_logs = res.data if hasattr(res, "data") else res
             print(f"[STATE] Successfully loaded {len(self.daily_logs)} log records for dashboard.")
@@ -82,6 +82,11 @@ class AppState:
     def get_daily_logs(self) -> list:
         """Returns the current synchronized app logs cache layer."""
         return self.daily_logs
+
+    def set_pending(self, breakdown: Any, source: str) -> None:
+        """Stages an unconfirmed macro breakdown for the Confirm view."""
+        self.pending_breakdown = breakdown
+        self.pending_source = source
 
     def clear_pending(self) -> None:
         """Purges staging data cleanly upon workflow execution finishes."""

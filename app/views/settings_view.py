@@ -2,6 +2,7 @@
 
 import flet as ft
 
+from app import theme
 from app.models import UserGoals
 from app.state import AppState
 
@@ -9,12 +10,20 @@ from app.state import AppState
 def build_settings_view(page: ft.Page, state: AppState) -> ft.View:
     goals = state.goals
 
-    calories_field = ft.TextField(label="Daily calories", value=str(goals.daily_calories), border_radius=10)
-    protein_field = ft.TextField(label="Daily protein (g)", value=str(goals.daily_protein), border_radius=10)
-    carbs_field = ft.TextField(label="Daily carbs (g)", value=str(goals.daily_carbs), border_radius=10)
-    fat_field = ft.TextField(label="Daily fat (g)", value=str(goals.daily_fat), border_radius=10)
+    calories_field = ft.TextField(
+        label="Daily calories", value=str(goals.daily_calories), **theme.styled_field()
+    )
+    protein_field = ft.TextField(
+        label="Daily protein (g)", value=str(goals.daily_protein), **theme.styled_field()
+    )
+    carbs_field = ft.TextField(
+        label="Daily carbs (g)", value=str(goals.daily_carbs), **theme.styled_field()
+    )
+    fat_field = ft.TextField(
+        label="Daily fat (g)", value=str(goals.daily_fat), **theme.styled_field()
+    )
 
-    save_status = ft.Text("", color=ft.Colors.GREEN, size=12)
+    save_status = ft.Text("", color=theme.SUCCESS, size=12)
 
     def on_save(e):
         try:
@@ -26,47 +35,38 @@ def build_settings_view(page: ft.Page, state: AppState) -> ft.View:
             )
         except ValueError:
             save_status.value = "Goals must be whole numbers."
-            save_status.color = ft.Colors.ERROR
+            save_status.color = theme.ERROR
             page.update()
             return
 
         state.db.save_goals(new_goals)
         state.refresh_goals()
         save_status.value = "Saved!"
-        save_status.color = ft.Colors.GREEN
+        save_status.color = theme.SUCCESS
         page.update()
 
     return ft.View(
         route="/settings",
+        bgcolor=theme.BG_CANVAS,
         controls=[
-            ft.AppBar(
-                title=ft.Text("Settings"),
-                leading=ft.IconButton(
-                    icon=ft.Icons.ARROW_BACK, 
-                    on_click=lambda e: page.go("/")
-                ),
-            ),
+            theme.app_bar("Settings", on_back=lambda e: page.go("/")),
             ft.Container(
                 content=ft.Column(
                     [
-                        ft.Text("Daily Macro Targets", weight=ft.FontWeight.W_600, size=16),
+                        ft.Text("Daily Macro Targets", weight=ft.FontWeight.W_600, size=16, color=theme.TEXT_PRIMARY),
                         ft.Text(
                             "Configure your nutritional baselines here. These goals will automatically "
                             "feed context directly into your dashboard trackers and AI fitness coach calculations.",
                             size=12,
-                            color=ft.Colors.ON_SURFACE_VARIANT,
+                            color=theme.TEXT_MUTED,
                         ),
-                        ft.Divider(height=10),
+                        ft.Divider(height=10, color=theme.BORDER),
                         calories_field,
                         protein_field,
                         carbs_field,
                         fat_field,
-                        ft.Divider(height=10),
-                        ft.FilledButton(
-                            text="Save Targets", 
-                            icon=ft.Icons.SAVE, 
-                            on_click=on_save
-                        ),
+                        ft.Divider(height=10, color="transparent"),
+                        theme.primary_button("Save Targets", icon=ft.Icons.SAVE, on_click=on_save),
                         save_status,
                     ],
                     spacing=14,
