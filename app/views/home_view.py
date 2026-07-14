@@ -40,7 +40,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
             bgcolor=theme.BG_SURFACE_ALT,
             border=ft.border.all(1, theme.BORDER),
-            border_radius=24,
+            border_radius=theme.RADIUS_LG,
             padding=ft.padding.symmetric(12, 10),
             on_click=lambda _: page.go("/text_log"),
             expand=True
@@ -52,7 +52,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
             bgcolor=theme.BG_SURFACE_ALT,
             border=ft.border.all(1, theme.BORDER),
-            border_radius=24,
+            border_radius=theme.RADIUS_LG,
             padding=ft.padding.symmetric(12, 10),
             on_click=lambda _: page.go("/lookup"),
             expand=True
@@ -63,7 +63,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 ft.Text("Snap", size=12, weight="bold", color=theme.ACCENT_ON)
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
             bgcolor=theme.ACCENT,
-            border_radius=24,
+            border_radius=theme.RADIUS_LG,
             padding=ft.padding.symmetric(12, 10),
             on_click=lambda _: page.go("/snap"),
             expand=True
@@ -85,7 +85,9 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                         ft.Text("Remaining", size=11, color=theme.TEXT_MUTED),
                     ],
                     spacing=0,
+                    alignment=ft.MainAxisAlignment.CENTER,
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    tight=True,
                 ),
                 width=132, height=132, alignment=ft.alignment.center,
             ),
@@ -114,7 +116,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
 
     progress_card = ft.Container(
         content=ft.Column([
-            ft.Text("Calories", size=17, weight="bold", color=theme.TEXT_PRIMARY),
+            ft.Text("Calories", size=17, weight="bold", color=theme.TEXT_PRIMARY, font_family=theme.DISPLAY_FONT),
             ft.Text("Remaining = Goal − Food", size=12, color=theme.TEXT_FAINT),
             ft.Row(
                 [calorie_ring, calorie_breakdown],
@@ -183,9 +185,12 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         bgcolor=theme.BG_CANVAS,
         controls=[
             ft.AppBar(
-                title=ft.Text("Bite Profile", size=18, weight="bold"),
+                title=ft.Text("Bite Profile", size=18, weight="bold", font_family=theme.DISPLAY_FONT),
                 leading=ft.IconButton(icon=ft.Icons.ACCOUNT_CIRCLE_OUTLINED, icon_color=theme.TEXT_MUTED, on_click=lambda _: page.go("/profile")),
-                actions=[ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_color=theme.TEXT_MUTED, on_click=lambda _: page.go("/history"))],
+                actions=[
+                    ft.IconButton(icon=ft.Icons.CHAT_BUBBLE_OUTLINE_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="AI Coach", on_click=lambda _: page.go("/coach")),
+                    ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="History", on_click=lambda _: page.go("/history")),
+                ],
                 bgcolor=theme.BG_CANVAS, elevation=0
             ),
             ft.Container(

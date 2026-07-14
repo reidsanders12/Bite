@@ -36,6 +36,7 @@ VIEW_BUILDERS = {
 def main(page: ft.Page):
     page.title = "Bite"
     page.theme_mode = ft.ThemeMode.LIGHT
+    page.fonts = {theme.DISPLAY_FONT: theme.DISPLAY_FONT_URL}
     page.theme = theme.build_theme()
     page.bgcolor = theme.BG_CANVAS
 
@@ -54,6 +55,8 @@ def main(page: ft.Page):
                     state.refresh_logs()
                 if hasattr(state, "refresh_goals"):
                     state.refresh_goals()
+                if hasattr(state, "refresh_profile"):
+                    state.refresh_profile()
 
                 # Dynamically look up and rebuild the requested view layout
                 builder = VIEW_BUILDERS.get(page.route)

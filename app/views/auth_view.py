@@ -7,7 +7,16 @@ from app import theme
 from app.state import AppState
 
 def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
+    mode = {"value": "login"}  # "login" | "register"
+
     # 1. UI Control Nodes Initialization
+    name_field = ft.TextField(
+        label="Full Name",
+        hint_text="e.g. Jamie Rivera",
+        prefix_icon=ft.Icons.PERSON_OUTLINE,
+        **theme.styled_field(),
+    )
+
     email_field = ft.TextField(
         label="Email Address",
         hint_text="e.g. you@example.com",
@@ -26,7 +35,34 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
 
     status_msg = ft.Text("", color=theme.ERROR, size=13, weight="w500", text_align=ft.TextAlign.CENTER)
 
+    name_slot = ft.Container(content=None, height=0)
+    primary_btn = theme.primary_button("Sign In", width=float("inf"), height=50)
+    toggle_btn = ft.TextButton(style=ft.ButtonStyle(color=theme.TEXT_MUTED))
+
+    def render_mode():
+        is_register = mode["value"] == "register"
+        name_slot.content = name_field if is_register else None
+        name_slot.height = None if is_register else 0
+        primary_btn.text = "Create Account" if is_register else "Sign In"
+        toggle_btn.text = "Already have an account? Sign in" if is_register else "New here? Create an account"
+        status_msg.value = ""
+
+    def toggle_mode(e):
+        mode["value"] = "register" if mode["value"] == "login" else "login"
+        render_mode()
+        page.update()
+
+    toggle_btn.on_click = toggle_mode
+
     # 2. Authentication Submit Pipelines
+    async def route_after_auth():
+        """New accounts (no saved macro goals yet) go through onboarding first."""
+        page.views.clear()
+        if state.has_completed_onboarding():
+            page.go("/")
+        else:
+            page.go("/survey")
+
     async def handle_login(e):
         email = email_field.value.strip()
         password = password_field.value.strip()
@@ -42,16 +78,11 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
         page.update()
 
         try:
-            credentials = {"email": email, "password": password}
-            response = state.db.auth.sign_in_with_password(credentials)
+            response = state.db.sign_in_user(email, password)
 
             if response and response.user:
                 status_msg.value = ""
-                page.update()
-
-                # Clear standard route views history tracking stacks and advance to home
-                page.views.clear()
-                page.go("/")
+                await route_after_auth()
             else:
                 raise Exception("We couldn't sign you in. Please try again.")
 
@@ -61,8 +92,15 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
             page.update()
 
     async def handle_register(e):
+        name = name_field.value.strip()
         email = email_field.value.strip()
         password = password_field.value.strip()
+
+        if not name:
+            status_msg.value = "Please tell us what to call you."
+            status_msg.color = theme.ERROR
+            page.update()
+            return
 
         if not email or len(password) < 6:
             status_msg.value = "Please enter a valid email and a password with at least 6 characters."
@@ -75,24 +113,40 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
         page.update()
 
         try:
-            credentials = {"email": email, "password": password}
-            response = state.db.auth.sign_up(credentials)
+            response = state.db.sign_up_user(email, password, full_name=name)
 
-            if response and response.user:
-                status_msg.value = "Account created! Check your inbox to confirm your email."
-                status_msg.color = theme.SUCCESS
-            else:
+            if not (response and response.user):
                 raise Exception("We couldn't create your account. Please try again.")
-            page.update()
+
+            if getattr(response, "session", None):
+                # Email confirmation is off for this project - session is live already.
+                status_msg.value = ""
+                await route_after_auth()
+            else:
+                mode["value"] = "login"
+                render_mode()
+                status_msg.value = "Account created! Check your inbox to confirm your email, then sign in."
+                status_msg.color = theme.SUCCESS
+                page.update()
 
         except Exception as err:
             status_msg.value = f"Registration failed: {str(err)}"
             status_msg.color = theme.ERROR
             page.update()
 
+    def on_submit(e):
+        if mode["value"] == "register":
+            page.run_task(handle_register, e)
+        else:
+            page.run_task(handle_login, e)
+
+    primary_btn.on_click = on_submit
+
     # Form submissions wired into the text blocks directly for quick access
-    email_field.on_submit = lambda e: page.run_task(handle_login, e)
-    password_field.on_submit = lambda e: page.run_task(handle_login, e)
+    email_field.on_submit = on_submit
+    password_field.on_submit = on_submit
+
+    render_mode()
 
     # 3. Layout Node Container Tree Structures
     return ft.View(
@@ -107,15 +161,16 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                     ft.Column([
                         ft.Container(
                             content=ft.Icon(ft.Icons.RESTAURANT_ROUNDED, color=theme.ACCENT_ON, size=28),
-                            width=56, height=56, bgcolor=theme.ACCENT, border_radius=16,
+                            width=56, height=56, bgcolor=theme.ACCENT, border_radius=theme.RADIUS_LG,
                             alignment=ft.alignment.center,
                         ),
                         ft.Divider(color="transparent", height=8),
                         ft.Text(
                             "Bite",
-                            size=28,
+                            size=30,
                             weight="bold",
                             color=theme.TEXT_PRIMARY,
+                            font_family=theme.DISPLAY_FONT,
                         ),
                         ft.Text(
                             "Track your meals in seconds",
@@ -129,6 +184,7 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                     # Form Fields Container Box
                     ft.Container(
                         content=ft.Column([
+                            name_slot,
                             email_field,
                             password_field,
                         ], spacing=16),
@@ -141,17 +197,8 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
 
                     # Action Execution Trigger Panels
                     ft.Column([
-                        theme.primary_button(
-                            "Sign In",
-                            width=float("inf"),
-                            height=50,
-                            on_click=lambda e: page.run_task(handle_login, e)
-                        ),
-                        ft.TextButton(
-                            "Create an account",
-                            style=ft.ButtonStyle(color=theme.TEXT_MUTED),
-                            on_click=lambda e: page.run_task(handle_register, e)
-                        )
+                        primary_btn,
+                        toggle_btn,
                     ], spacing=10, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),

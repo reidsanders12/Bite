@@ -55,9 +55,14 @@ _TEXT_INSTRUCTION_TEMPLATE = (
 _COACH_SYSTEM_PROMPT = (
     "You are an elite sports nutritionist and personal fitness trainer. "
     "You are direct, highly supportive, evidence-based, and concise. "
-    "You have full access to the user's current daily macro stats and target goals. "
-    "Provide actionable advice, programming tweaks, or recipe ideas based on their actual day. "
-    "Always wrap nutritional or training data points clearly."
+    "You have full access to the user's current daily macro stats, target goals, "
+    "and remaining macro budget for today. When asked for a meal, only suggest "
+    "meals that realistically fit within the user's REMAINING calories/macros for "
+    "today -- do not suggest something that would blow their budget. When asked "
+    "for a workout, build it around the user's stated fitness goals (if given) "
+    "and today's remaining energy/protein. Provide actionable advice, programming "
+    "tweaks, or recipe ideas based on their actual day. Always wrap nutritional or "
+    "training data points clearly."
 )
 
 
@@ -149,27 +154,36 @@ async def analyze_text(text: str) -> MacroBreakdown:
 # ----------------------------------------------------------------- AI COACH SYSTEM
 
 async def chat_with_coach(
-    user_message: str, 
-    history: list, 
-    totals: dict, 
-    goals: UserGoals
+    user_message: str,
+    history: list,
+    totals: dict,
+    goals: UserGoals,
+    workout_goals: str = "",
 ) -> str:
     """Runs a free conversational fitness consultation directly on the client device.
-    
-    Injects local database macro state directly to give the AI context on their day.
+
+    Injects local database macro state (including how much of today's budget
+    is left) plus the user's stated fitness goals, to give the AI context on
+    both what they can still eat today and what they're training for.
     """
     client = _get_client()
-    
+
+    remaining_cal = goals.daily_calories - totals['calories']
+    remaining_pro = goals.daily_protein - totals['protein']
+    remaining_carb = goals.daily_carbs - totals['carbs']
+    remaining_fat = goals.daily_fat - totals['fat']
+
     # 1. Synthesize current fitness context from cloud database metrics
     context_prefix = (
         f"[CURRENT LOGGED STATS FOR TODAY]:\n"
-        f"- Calories Consumed: {totals['calories']} / Target: {goals.daily_calories} kcal\n"
-        f"- Protein Consumed: {totals['protein']}g / Target: {goals.daily_protein}g\n"
-        f"- Carbs Consumed: {totals['carbs']}g / Target: {goals.daily_carbs}g\n"
-        f"- Fat Consumed: {totals['fat']}g / Target: {goals.daily_fat}g\n\n"
-        f"Answer the user's question with these metrics explicitly in mind."
+        f"- Calories: {totals['calories']} consumed / {goals.daily_calories} target / {remaining_cal} remaining kcal\n"
+        f"- Protein: {totals['protein']}g consumed / {goals.daily_protein}g target / {remaining_pro}g remaining\n"
+        f"- Carbs: {totals['carbs']}g consumed / {goals.daily_carbs}g target / {remaining_carb}g remaining\n"
+        f"- Fat: {totals['fat']}g consumed / {goals.daily_fat}g target / {remaining_fat}g remaining\n\n"
+        + (f"[USER'S STATED FITNESS GOALS]: {workout_goals}\n\n" if workout_goals.strip() else "")
+        + f"Answer the user's question with these metrics explicitly in mind."
     )
-    
+
     # 2. Build explicit conversation history for Gemini API
     contents = []
     for turn in history[-6:]:  # Rolling memory window to keep context tight and fast

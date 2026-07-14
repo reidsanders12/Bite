@@ -7,26 +7,39 @@ import flet as ft
 from app import theme
 
 def build_history_view(page: ft.Page, state) -> ft.View:
-    # 1. Force state to grab fresh database timelines
-    if hasattr(state, "refresh_logs"):
-        state.refresh_logs()
-        
-    daily_logs = state.get_daily_logs() if hasattr(state, "get_daily_logs") else getattr(state, "logs", [])
+    # 1. Force state to grab the full all-time log history (not just today)
+    if hasattr(state, "refresh_history"):
+        state.refresh_history()
+
+    daily_logs = state.get_history_logs() if hasattr(state, "get_history_logs") else getattr(state, "logs", [])
 
     # Container container reference layout to refresh list state dynamically
     history_list = ft.Column(spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
 
-    def delete_item(entry_id, card_control):
-        # 1. Fire execution block against SQLite/AppState layer
-        if hasattr(state, "remove_log"):
-            state.remove_log(entry_id)
+    confirm_dialog = ft.AlertDialog(modal=True)
 
-        # 2. Animate out or immediately drop control from active visual layout tree
-        history_list.controls.remove(card_control)
-        if not history_list.controls:
-            history_list.controls.append(ft.Text("No historical logging events saved.", color=theme.TEXT_MUTED, size=13))
+    def delete_item(entry_id, card_control, meal_name):
+        def do_delete(e):
+            if hasattr(state, "remove_log"):
+                state.remove_log(entry_id)
 
-        page.update()
+            history_list.controls.remove(card_control)
+            if not history_list.controls:
+                history_list.controls.append(ft.Text("No historical logging events saved.", color=theme.TEXT_MUTED, size=13))
+
+            page.close(confirm_dialog)
+            page.update()
+
+        def cancel(e):
+            page.close(confirm_dialog)
+
+        confirm_dialog.title = ft.Text("Delete this entry?")
+        confirm_dialog.content = ft.Text(f"\"{meal_name}\" will be permanently removed from your log.")
+        confirm_dialog.actions = [
+            ft.TextButton("Cancel", style=ft.ButtonStyle(color=theme.TEXT_MUTED), on_click=cancel),
+            ft.TextButton("Delete", style=ft.ButtonStyle(color=theme.ERROR), on_click=do_delete),
+        ]
+        page.open(confirm_dialog)
 
     # 2. Map row cards into control stacks dynamically
     if not daily_logs:
@@ -57,7 +70,7 @@ def build_history_view(page: ft.Page, state) -> ft.View:
                     icon_color=theme.ERROR,
                     tooltip="Delete log entry",
                     # Pass context reference hooks into execution pipeline click handlers
-                    on_click=lambda e, eid=entry_id, card=item_card: delete_item(eid, card)
+                    on_click=lambda e, eid=entry_id, card=item_card, mn=meal_name: delete_item(eid, card, mn)
                 )
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 

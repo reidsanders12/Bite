@@ -224,7 +224,7 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         bgcolor=theme.BG_CANVAS,
         controls=[
             ft.AppBar(
-                title=ft.Text("GLOBAL INDEX LOOKUP", size=16, weight="bold"),
+                title=ft.Text("GLOBAL INDEX LOOKUP", size=16, weight="bold", font_family=theme.DISPLAY_FONT),
                 bgcolor=theme.BG_CANVAS,
                 color=theme.TEXT_PRIMARY,
                 elevation=0,

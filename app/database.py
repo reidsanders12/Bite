@@ -2,30 +2,51 @@
 Cloud Data Layer via Supabase PostgreSQL.
 Handles multi-user row scoping utilizing authenticated user session identifiers.
 """
-import os
 from typing import List, Optional
 from supabase import create_client, Client
+from app.config import SUPABASE_URL, SUPABASE_ANON_KEY
 from app.models import UserGoals
 
 class Database:
     def __init__(self):
-        self.url: str = os.getenv("SUPABASE_URL", "")
-        self.key: str = os.getenv("SUPABASE_KEY", "")
-        
-        if not self.url or not self.key:
-            print("[Database Engine] WARNING: Missing Supabase environment keys in .env!")
-            
-        self.client: Client = create_client(self.url, self.key)
+        self.client: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+    @property
+    def auth(self):
+        """Passthrough so callers can still reach the underlying GoTrue auth client."""
+        return self.client.auth
 
     # --- AUTH MODULE INTERFACES ---
 
-    def sign_up_user(self, email: str, password: str):
+    def sign_up_user(self, email: str, password: str, full_name: Optional[str] = None):
         """Registers a brand new account identity within the Supabase Auth cluster."""
-        return self.client.auth.sign_up({"email": email, "password": password})
+        payload = {"email": email, "password": password}
+        if full_name:
+            payload["options"] = {"data": {"full_name": full_name}}
+        return self.client.auth.sign_up(payload)
 
     def sign_in_user(self, email: str, password: str):
         """Authenticates credentials against GoTrue engine and issues a stateful token."""
         return self.client.auth.sign_in_with_password({"email": email, "password": password})
+
+    def update_profile_data(self, data: dict):
+        """Merges arbitrary profile fields (biometrics, units, location) into
+        the user's auth metadata, alongside full_name. GoTrue merges the
+        `data` object into existing user_metadata rather than replacing it."""
+        try:
+            self.client.auth.update_user({"data": data})
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to update profile metadata: {e}")
+
+    def get_profile_data(self) -> dict:
+        """Reads the signed-in user's full auth metadata blob."""
+        try:
+            user_res = self.client.auth.get_user()
+            if user_res and user_res.user:
+                return user_res.user.user_metadata or {}
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to read profile metadata: {e}")
+        return {}
 
     def get_current_user_id(self) -> Optional[str]:
         """Extracts the unique uuid primary key from the active user session context."""
@@ -61,14 +82,13 @@ class Database:
         except Exception as e:
             print(f"[Supabase Sync Error] Failed to log food: {e}")
 
-    def get_daily_logs(self) -> List[dict]:
-        """Fetches logging timelines matching exclusively the active user session."""
+    def get_all_logs(self) -> List[dict]:
+        """Fetches the full logging history for the active user (all time)."""
         uid = self.get_current_user_id()
         if not uid:
             return []
 
         try:
-            # Filters items utilizing explicit column row constraints (.eq)
             response = (
                 self.client.table("food_logs")
                 .select("*")
@@ -79,6 +99,27 @@ class Database:
             return response.data or []
         except Exception as e:
             print(f"[Supabase Sync Error] Failed to fetch logs: {e}")
+            return []
+
+    def get_logs_for_date(self, date_iso: str) -> List[dict]:
+        """Fetches only the logs created on the given local date (YYYY-MM-DD)."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return []
+
+        try:
+            response = (
+                self.client.table("food_logs")
+                .select("*")
+                .eq("user_id", uid)
+                .gte("created_at", f"{date_iso}T00:00:00")
+                .lte("created_at", f"{date_iso}T23:59:59.999999")
+                .order("id", desc=True)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to fetch today's logs: {e}")
             return []
 
     def delete_log_entry(self, entry_id: int):
@@ -93,24 +134,41 @@ class Database:
         except Exception as e:
             print(f"[Supabase Sync Error] Failed to purge remote row: {e}")
 
-    def save_goals(self, goals: UserGoals):
-        """Upserts a custom target breakdown tied to the individual's user token."""
+    def save_goals(self, goals: UserGoals) -> tuple[bool, str]:
+        """Updates the existing goals row for this user, or inserts one if
+        none exists yet. Deliberately does a manual select-then-write instead
+        of `.upsert(on_conflict="user_id")`: that call errors out unless the
+        table has a unique constraint on user_id, which isn't guaranteed --
+        this way it works regardless of what constraints the table has.
+        Matches on user_id rather than an `id` column, since user_goals has
+        no surrogate id column (user_id is the key -- one row per user).
+        Returns (success, error_message) so callers can show the user *why*
+        it failed instead of silently falling back to default goals.
+        """
         uid = self.get_current_user_id()
         if not uid:
-            return
+            msg = "No active user session."
+            print(f"[Supabase Sync Error] Aborting goal save: {msg}")
+            return False, msg
 
+        payload = {
+            "user_id": uid,
+            "daily_calories": int(goals.daily_calories),
+            "daily_protein": int(goals.daily_protein),
+            "daily_carbs": int(goals.daily_carbs),
+            "daily_fat": int(goals.daily_fat)
+        }
         try:
-            payload = {
-                "user_id": uid, # Primary key constraint target identifier
-                "daily_calories": int(goals.daily_calories),
-                "daily_protein": int(goals.daily_protein),
-                "daily_carbs": int(goals.daily_carbs),
-                "daily_fat": int(goals.daily_fat)
-            }
-            self.client.table("user_goals").upsert(payload).execute()
+            existing = self.client.table("user_goals").select("user_id").eq("user_id", uid).execute()
+            if existing.data:
+                self.client.table("user_goals").update(payload).eq("user_id", uid).execute()
+            else:
+                self.client.table("user_goals").insert(payload).execute()
             print(f"[Supabase Database Engine] Synchronized target goal parameters for UUID: {uid}")
+            return True, ""
         except Exception as e:
             print(f"[Supabase Sync Error] Failed to save goals: {e}")
+            return False, str(e)
 
     def get_goals(self) -> Optional[UserGoals]:
         """Retrieves targeted macro calculations for the individual user."""
@@ -119,7 +177,14 @@ class Database:
             return None
 
         try:
-            response = self.client.table("user_goals").select("*").eq("user_id", uid).execute()
+            # No `id` column on user_goals (user_id is the key), so no
+            # order/limit needed -- there's at most one row per user.
+            response = (
+                self.client.table("user_goals")
+                .select("*")
+                .eq("user_id", uid)
+                .execute()
+            )
             if response.data:
                 row = response.data[0]
                 return UserGoals(

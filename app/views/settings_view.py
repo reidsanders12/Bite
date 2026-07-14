@@ -39,10 +39,14 @@ def build_settings_view(page: ft.Page, state: AppState) -> ft.View:
             page.update()
             return
 
-        state.db.save_goals(new_goals)
-        state.refresh_goals()
-        save_status.value = "Saved!"
-        save_status.color = theme.SUCCESS
+        saved_ok, save_err = state.db.save_goals(new_goals)
+        if saved_ok:
+            state.refresh_goals()
+            save_status.value = "Saved!"
+            save_status.color = theme.SUCCESS
+        else:
+            save_status.value = f"Couldn't save: {save_err}"
+            save_status.color = theme.ERROR
         page.update()
 
     return ft.View(

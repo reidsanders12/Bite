@@ -1,4 +1,4 @@
-"""Shared design tokens for Bite's light, friendly UI.
+"""Shared design tokens for Bite's warm, editorial UI.
 
 Every view should import its colors from here instead of hardcoding hex
 strings, so the whole app reads as one consistent design instead of a
@@ -7,42 +7,47 @@ patchwork of slightly-different surfaces.
 
 import flet as ft
 
-# Backgrounds, lightest to a touch darker
-BG_CANVAS = "#F5F6F8"       # page/view background
-BG_SURFACE = "#FFFFFF"      # cards, panels
-BG_SURFACE_ALT = "#F0F2F5"  # inputs, chips, nested surfaces, unfilled meter tracks
+# Backgrounds: warm paper tones instead of clinical white/gray
+BG_CANVAS = "#FAF3EA"      # page/view background (warm cream)
+BG_SURFACE = "#FFFDF9"     # cards, panels (barely-off-white paper)
+BG_SURFACE_ALT = "#F1E9DC"  # inputs, chips, nested surfaces, unfilled meter tracks
 
-# Borders
-BORDER = "#E7E9EC"
-BORDER_STRONG = "#D5D9DE"
+# Borders — editorial style leans on hairlines instead of shadow for structure
+BORDER = "#E4D9C7"
+BORDER_STRONG = "#CBB99E"
 
 # Text
-TEXT_PRIMARY = "#1A1D29"
-TEXT_MUTED = "#6B7280"     # secondary text, labels, captions
-TEXT_FAINT = "#9CA3AF"     # tertiary text, placeholders, section eyebrows
+TEXT_PRIMARY = "#2B2622"  # warm ink, not pure black
+TEXT_MUTED = "#75695A"    # secondary text, labels, captions
+TEXT_FAINT = "#A79880"    # tertiary text, placeholders, section eyebrows
 
 # Accent + semantic colors
-ACCENT = "#2F86EB"
-ACCENT_ON = "#FFFFFF"      # text/icon color when placed on top of ACCENT
-# Protein/Carbs/Fat validated as a set for colorblind-safe separation on this
-# light surface (the prior dark-theme red/green pairing was a near-worst-case
-# deuteranopia confusion; these read fine paired with the direct text labels
-# every view already shows beside them).
-PROTEIN = "#E34948"
-CARBS = "#1BAF7A"
-FAT = "#EDA100"
-ERROR = "#E5484D"
-SUCCESS = "#1BAF7A"
+ACCENT = "#C1652F"        # terracotta
+ACCENT_ON = "#FFFDF9"     # text/icon color when placed on top of ACCENT
+# Protein/Carbs/Fat as a warm rust/olive/mustard set. Distinguishable by both
+# hue and lightness (rust is darkest, mustard lightest) so the pairing still
+# holds up even before the text labels every view shows beside them kick in.
+PROTEIN = "#A8432E"       # rust
+CARBS = "#5B7B45"         # olive
+FAT = "#D19A3D"           # mustard
+ERROR = "#B3261E"
+SUCCESS = "#4F7942"
 
-RADIUS_SM = 10
-RADIUS_MD = 14
-RADIUS_LG = 20
+RADIUS_SM = 6
+RADIUS_MD = 8
+RADIUS_LG = 12
+
+# Serif display face for headlines/big numbers; body text stays on the
+# platform sans default for readability at small sizes. Registered as a web
+# font in main.py (Flet's canvaskit renderer can't use system fonts by name).
+DISPLAY_FONT = "Lora"
+DISPLAY_FONT_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf"
 
 CARD_SHADOW = ft.BoxShadow(
     spread_radius=0,
-    blur_radius=16,
-    color=ft.Colors.with_opacity(0.06, "#0B1220"),
-    offset=ft.Offset(0, 4),
+    blur_radius=10,
+    color=ft.Colors.with_opacity(0.05, "#6B4F2E"),
+    offset=ft.Offset(0, 3),
 )
 
 
@@ -116,7 +121,13 @@ def styled_dropdown(**overrides) -> dict:
 def app_bar(title: str, on_back=None, actions=None) -> ft.AppBar:
     """Consistent AppBar: canvas background, back arrow, muted icon color."""
     return ft.AppBar(
-        title=ft.Text(title, weight=ft.FontWeight.BOLD, size=18, color=TEXT_PRIMARY),
+        title=ft.Text(
+            title,
+            weight=ft.FontWeight.BOLD,
+            size=19,
+            color=TEXT_PRIMARY,
+            font_family=DISPLAY_FONT,
+        ),
         bgcolor=BG_CANVAS,
         elevation=0,
         leading=ft.IconButton(
@@ -131,7 +142,7 @@ def app_bar(title: str, on_back=None, actions=None) -> ft.AppBar:
 
 
 def surface_card(content: ft.Control, **overrides) -> ft.Container:
-    """Standard elevated card: white surface, soft shadow, rounded corners."""
+    """Standard card: paper surface, hairline border, minimal shadow."""
     base = dict(
         content=content,
         bgcolor=BG_SURFACE,
@@ -145,7 +156,7 @@ def surface_card(content: ft.Control, **overrides) -> ft.Container:
 
 
 def primary_button(text: str, on_click=None, icon=None, **overrides) -> ft.FilledButton:
-    """Blue-on-white filled button matching the rest of the app."""
+    """Terracotta filled button matching the rest of the app."""
     base = dict(
         text=text,
         icon=icon,

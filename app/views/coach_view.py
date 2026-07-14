@@ -1,163 +1,225 @@
+"""
+AI Coach: a chat-based trainer/nutritionist that already knows your remaining
+macro budget for today and (optionally) what you've told it about your
+fitness goals, so it can suggest a meal that fits or build you a workout.
+"""
 import flet as ft
 from app import theme
 from app.state import AppState
-from app.ai_engine import chat_with_coach
+from app.ai_engine import chat_with_coach, AIEngineError
 
-# Local aliases kept so the rest of this file reads the same as before,
-# now backed by the app-wide tokens in app/theme.py instead of one-off hex.
-BG_CANVAS = theme.BG_CANVAS
-BG_SURFACE = theme.BG_SURFACE
-BG_INPUT = theme.BG_SURFACE_ALT
-COLOR_ACCENT = theme.ACCENT
-COLOR_PROTEIN = theme.PROTEIN
-COLOR_CARBS = theme.CARBS
-COLOR_FAT = theme.FAT
 
-def create_macro_ring(label: str, consumed: int, target: int, color: str) -> ft.Container:
-    """Renders a modern, flat dashboard indicator metric card."""
-    percent = min(consumed / max(target, 1), 1.0)
+def _remaining_tile(label: str, remaining: int, unit: str, color: str) -> ft.Control:
     return ft.Container(
-        content=ft.Column([
-            ft.Text(label, size=12, color=theme.TEXT_MUTED, weight=ft.FontWeight.W_600),
-            ft.Stack([
-                ft.ProgressRing(value=percent, stroke_width=6, color=color, bgcolor=theme.BG_SURFACE_ALT, width=64, height=64),
-                ft.Container(
-                    content=ft.Text(f"{consumed}g", size=11, weight="bold", color=theme.TEXT_PRIMARY),
-                    alignment=ft.alignment.center,
-                    width=64, height=64
-                )
-            ]),
-            ft.Text(f"Target: {target}g", size=10, color=theme.TEXT_MUTED)
-        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-        bgcolor=BG_SURFACE,
-        padding=14,
-        border_radius=theme.RADIUS_MD,
-        expand=True
+        content=ft.Column(
+            [
+                ft.Text(f"{remaining:,}{unit}", size=17, weight="bold", color=color),
+                ft.Text(label, size=11, color=theme.TEXT_MUTED),
+            ],
+            spacing=2,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        bgcolor=theme.BG_SURFACE_ALT,
+        border_radius=theme.RADIUS_SM,
+        padding=ft.padding.symmetric(vertical=10, horizontal=8),
+        expand=True,
+        alignment=ft.alignment.center,
     )
 
-def build_coach_view(page: ft.Page, state: AppState) -> ft.Container:
-    """Generates the premium Cyber-Athlete AI Fitness Coach interface."""
-    
-    # Extract current real data parameters from local engine
-    totals = state.db.get_totals_for_date()
+
+def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
+    totals = state.get_daily_totals()
     goals = state.goals
-    
+    profile = state.get_profile_data() if hasattr(state, "get_profile_data") else {}
+
+    remaining_cal = goals.daily_calories - totals["calories"]
+    remaining_pro = goals.daily_protein - totals["protein"]
+    remaining_carb = goals.daily_carbs - totals["carbs"]
+    remaining_fat = goals.daily_fat - totals["fat"]
+
+    goals_field = ft.TextField(
+        value=profile.get("workout_goals", ""),
+        hint_text="e.g. Build muscle, gym access 4x/week, avoid leg day on Fridays",
+        multiline=True,
+        min_lines=1,
+        max_lines=3,
+        **theme.styled_field(),
+    )
+    goals_status = ft.Text("", size=11, color=theme.SUCCESS)
+
+    def save_goals_text(e):
+        text = (goals_field.value or "").strip()
+        if hasattr(state, "save_profile_data"):
+            state.save_profile_data({"workout_goals": text})
+        goals_status.value = "Saved"
+        page.update()
+
     chat_list = ft.ListView(expand=True, spacing=12, padding=10, auto_scroll=True)
     chat_input = ft.TextField(
         hint_text="Ask about programming, recovery, recipes...",
-        hint_style=ft.TextStyle(color=theme.TEXT_MUTED),
-        bgcolor=BG_INPUT,
-        border_color=ft.Colors.TRANSPARENT,
-        focused_border_color=COLOR_ACCENT,
-        border_radius=theme.RADIUS_SM,
         expand=True,
-        text_style=ft.TextStyle(color=theme.TEXT_PRIMARY),
+        **theme.styled_field(),
     )
 
-    # Load past database logs to keep current session preserved
-    saved_history = state.db.get_chat_history()
-
-    def render_bubble(text: str, is_user: bool):
+    def render_bubble(text: str, is_user: bool) -> ft.Control:
         return ft.Row(
             controls=[
                 ft.Container(
                     content=ft.Text(text, color=theme.TEXT_PRIMARY, size=14),
-                    bgcolor=BG_INPUT if is_user else BG_SURFACE,
+                    bgcolor=theme.BG_SURFACE_ALT if is_user else theme.BG_SURFACE,
                     padding=14,
                     border_radius=ft.border_radius.only(
-                        top_left=16, top_right=16, 
-                        bottom_left=4 if is_user else 16, 
-                        bottom_right=16 if is_user else 4
+                        top_left=16, top_right=16,
+                        bottom_left=4 if is_user else 16,
+                        bottom_right=16 if is_user else 4,
                     ),
-                    border=None if is_user else ft.border.only(left=ft.BorderSide(3, COLOR_ACCENT)),
-                    max_width=420 * 0.75, # Keeps bubble sizing perfect for the locked width viewport
+                    border=None if is_user else ft.border.only(left=ft.BorderSide(3, theme.ACCENT)),
+                    width=280,
                 )
             ],
-            alignment=ft.MainAxisAlignment.END if is_user else ft.MainAxisAlignment.START
+            alignment=ft.MainAxisAlignment.END if is_user else ft.MainAxisAlignment.START,
         )
 
-    for msg in saved_history:
+    for msg in state.get_chat_history():
         chat_list.controls.append(render_bubble(msg["text"], msg["is_user"]))
 
-    async def send_message(e):
-        user_txt = chat_input.value.strip()
-        if not user_txt:
+    async def send_text(text: str):
+        text = text.strip()
+        if not text:
             return
-            
+
         chat_input.value = ""
-        chat_list.controls.append(render_bubble(user_txt, is_user=True))
-        state.db.add_chat_message(user_txt, is_user=True)
-        
-        # Add modern visual loading ring inside chat queue
-        loader = ft.Row([ft.ProgressRing(width=20, height=20, color=COLOR_ACCENT)], alignment=ft.MainAxisAlignment.START)
+        chat_list.controls.append(render_bubble(text, is_user=True))
+        state.add_chat_message(text, is_user=True)
+
+        loader = ft.Row([ft.ProgressRing(width=20, height=20, color=theme.ACCENT)], alignment=ft.MainAxisAlignment.START)
         chat_list.controls.append(loader)
         page.update()
-        
+
         try:
-            # Process response on device with structural contextual awareness
-            history_payload = state.db.get_chat_history()
-            reply = await chat_with_coach(user_txt, history_payload, totals, goals)
-            
+            reply = await chat_with_coach(
+                text,
+                state.get_chat_history(),
+                totals,
+                goals,
+                workout_goals=goals_field.value or "",
+            )
             chat_list.controls.remove(loader)
             chat_list.controls.append(render_bubble(reply, is_user=False))
-            state.db.add_chat_message(reply, is_user=False)
+            state.add_chat_message(reply, is_user=False)
+        except AIEngineError as err:
+            chat_list.controls.remove(loader)
+            chat_list.controls.append(render_bubble(f"Coach couldn't respond: {err}", is_user=False))
         except Exception as err:
-            if loader in chat_list.controls:
-                chat_list.controls.remove(loader)
-            chat_list.controls.append(render_bubble(f"Coach Link Failure: {err}", is_user=False))
-            
+            chat_list.controls.remove(loader)
+            chat_list.controls.append(render_bubble(f"Coach link failure: {err}", is_user=False))
+
         page.update()
 
-    chat_input.on_submit = send_message
+    async def on_send_click(e):
+        await send_text(chat_input.value or "")
 
-    # Core Page Container Layout
-    return ft.Container(
-        expand=True,
-        bgcolor=BG_CANVAS,
-        padding=20,
-        content=ft.Column([
-            # Dashboard Title Header
-            ft.Row([
-                ft.Column([
-                    ft.Text("MIND COACH", size=24, weight=ft.FontWeight.W_900, color=theme.TEXT_PRIMARY),
-                    ft.Text("On-device AI Nutritionist & Trainer", size=12, color=theme.TEXT_MUTED, italic=True),
-                ]),
-                ft.IconButton(
-                    icon=ft.Icons.ARROW_BACK_IOS_NEW_ROUNDED,
-                    icon_color=COLOR_ACCENT,
-                    on_click=lambda _: page.go("/")
-                )
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+    async def on_suggest_meal(e):
+        await send_text("Suggest a meal I can eat right now that fits within my remaining macros for today.")
 
-            ft.Divider(color=theme.BORDER, height=10),
+    async def on_suggest_workout(e):
+        await send_text("Based on my stated fitness goals, suggest a workout for today.")
 
-            # Interactive Macro Context Rows pulled from local state
-            ft.Row([
-                create_macro_ring("PROTEIN", totals["protein"], goals.daily_protein, COLOR_PROTEIN),
-                create_macro_ring("CARBS", totals["carbs"], goals.daily_carbs, COLOR_CARBS),
-                create_macro_ring("FAT", totals["fat"], goals.daily_fat, COLOR_FAT),
-            ], spacing=10),
+    chat_input.on_submit = lambda e: page.run_task(on_send_click, e)
 
-            ft.Divider(color=theme.BORDER, height=15),
-
-            # Main Message Thread Frame
+    return ft.View(
+        route="/coach",
+        bgcolor=theme.BG_CANVAS,
+        controls=[
+            theme.app_bar("AI Coach", on_back=lambda e: page.go("/")),
             ft.Container(
-                content=chat_list,
                 expand=True,
-                bgcolor=theme.BG_CANVAS,
-                border=ft.border.all(1, theme.BORDER),
-                border_radius=theme.RADIUS_MD,
-                padding=10,
+                padding=20,
+                content=ft.Column(
+                    [
+                        theme.surface_card(
+                            ft.Column(
+                                [
+                                    ft.Text("Still available today", size=13, weight="bold", color=theme.TEXT_PRIMARY),
+                                    ft.Row(
+                                        [
+                                            _remaining_tile("kcal", remaining_cal, "", theme.ACCENT),
+                                            _remaining_tile("protein", remaining_pro, "g", theme.PROTEIN),
+                                            _remaining_tile("carbs", remaining_carb, "g", theme.CARBS),
+                                            _remaining_tile("fat", remaining_fat, "g", theme.FAT),
+                                        ],
+                                        spacing=8,
+                                    ),
+                                ],
+                                spacing=10,
+                            ),
+                            padding=16,
+                        ),
+                        theme.surface_card(
+                            ft.Column(
+                                [
+                                    ft.Text("Your fitness goals", size=13, weight="bold", color=theme.TEXT_PRIMARY),
+                                    ft.Text(
+                                        "Tell the coach once — it'll remember this for every meal and workout suggestion.",
+                                        size=11, color=theme.TEXT_MUTED,
+                                    ),
+                                    goals_field,
+                                    ft.Row(
+                                        [
+                                            goals_status,
+                                            ft.TextButton(
+                                                "Save goals",
+                                                style=ft.ButtonStyle(color=theme.ACCENT),
+                                                on_click=save_goals_text,
+                                            ),
+                                        ],
+                                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    ),
+                                ],
+                                spacing=6,
+                            ),
+                            padding=16,
+                        ),
+                        ft.Row(
+                            [
+                                ft.OutlinedButton(
+                                    "Suggest a meal",
+                                    icon=ft.Icons.RESTAURANT_MENU,
+                                    on_click=lambda e: page.run_task(on_suggest_meal, e),
+                                    expand=True,
+                                ),
+                                ft.OutlinedButton(
+                                    "Suggest a workout",
+                                    icon=ft.Icons.FITNESS_CENTER,
+                                    on_click=lambda e: page.run_task(on_suggest_workout, e),
+                                    expand=True,
+                                ),
+                            ],
+                            spacing=10,
+                        ),
+                        ft.Container(
+                            content=chat_list,
+                            expand=True,
+                            bgcolor=theme.BG_SURFACE,
+                            border=ft.border.all(1, theme.BORDER),
+                            border_radius=theme.RADIUS_MD,
+                            padding=10,
+                        ),
+                        ft.Row(
+                            [
+                                chat_input,
+                                ft.IconButton(
+                                    icon=ft.Icons.SEND,
+                                    icon_color=theme.ACCENT,
+                                    on_click=lambda e: page.run_task(on_send_click, e),
+                                ),
+                            ],
+                            spacing=10,
+                        ),
+                    ],
+                    spacing=14,
+                    expand=True,
+                ),
             ),
-
-            # Message Input Section
-            ft.Row([
-                chat_input,
-                ft.FloatingActionButton(
-                    bgcolor=COLOR_ACCENT,
-                    content=ft.Icon(ft.Icons.SEND, color=theme.ACCENT_ON, size=16),
-                    on_click=send_message
-                )
-            ], spacing=10)
-        ])
+        ],
     )
