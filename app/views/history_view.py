@@ -17,17 +17,22 @@ def build_history_view(page: ft.Page, state) -> ft.View:
     history_list = ft.Column(spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
 
     confirm_dialog = ft.AlertDialog(modal=True)
+    error_banner = ft.Text("", color=theme.ERROR, size=12)
 
     def delete_item(entry_id, card_control, meal_name):
         def do_delete(e):
-            if hasattr(state, "remove_log"):
-                state.remove_log(entry_id)
+            success, err = state.remove_log(entry_id) if hasattr(state, "remove_log") else (False, "")
 
-            history_list.controls.remove(card_control)
-            if not history_list.controls:
-                history_list.controls.append(ft.Text("No historical logging events saved.", color=theme.TEXT_MUTED, size=13))
+            if success:
+                history_list.controls.remove(card_control)
+                if not history_list.controls:
+                    history_list.controls.append(ft.Text("No historical logging events saved.", color=theme.TEXT_MUTED, size=13))
+                error_banner.value = ""
+                page.close(confirm_dialog)
+            else:
+                error_banner.value = f"Couldn't delete: {err}"
+                page.close(confirm_dialog)
 
-            page.close(confirm_dialog)
             page.update()
 
         def cancel(e):
@@ -85,6 +90,7 @@ def build_history_view(page: ft.Page, state) -> ft.View:
                 content=ft.Column([
                     ft.Text("Manage Your Logs", size=18, weight="bold", color=theme.TEXT_PRIMARY),
                     ft.Text("Review or remove consumption track items recorded to your SQL local instance profile.", size=12, color=theme.TEXT_MUTED),
+                    error_banner,
                     ft.Divider(color=theme.BORDER, height=20),
                     history_list
                 ], expand=True),

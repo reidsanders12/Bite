@@ -20,7 +20,7 @@ from typing import List
 from google import genai
 from google.genai import types, errors
 
-from app.models import MacroBreakdown, UserGoals
+from app.models import MacroBreakdown, UserGoals, WorkoutEstimate
 
 MODEL_NAME = "gemini-2.5-flash"
 
@@ -49,6 +49,24 @@ _IMAGE_INSTRUCTION = (
 _TEXT_INSTRUCTION_TEMPLATE = (
     "Parse the following natural-language description of a meal or ingredient. "
     "Identify individual items and calculate an accurate aggregated macro breakdown:\n\n"
+    "\"\"\"\n{text}\n\"\"\""
+)
+
+_WORKOUT_SYSTEM_PROMPT = (
+    "You are a precise exercise-physiology estimation assistant embedded in a "
+    "fitness tracking app. Always respond with your best numeric estimate even "
+    "if you are uncertain -- never refuse and never ask a clarifying question. "
+    "Estimate realistic calories burned using standard MET (metabolic "
+    "equivalent) values for the activity described, scaled by the person's "
+    "body weight (assume an average adult of about 70kg if none is given) and "
+    "the stated or implied duration. Round duration and calories to whole "
+    "numbers."
+)
+
+_WORKOUT_INSTRUCTION_TEMPLATE = (
+    "Estimate calories burned for this workout description. {weight_clause}"
+    "If a duration is stated or implied in the description, use it; otherwise "
+    "estimate a typical duration for this kind of session.\n\n"
     "\"\"\"\n{text}\n\"\"\""
 )
 
@@ -151,6 +169,39 @@ async def analyze_text(text: str) -> MacroBreakdown:
     return _extract(response)
 
 
+async def analyze_workout(text: str, weight_kg: float = None) -> WorkoutEstimate:
+    """Send a natural-language workout description to Gemini for a calories-burned estimate."""
+    client = _get_client()
+    weight_clause = f"The person weighs approximately {weight_kg:.0f}kg. " if weight_kg else ""
+    prompt = _WORKOUT_INSTRUCTION_TEMPLATE.format(weight_clause=weight_clause, text=text)
+    try:
+        response = await _generate_with_retry(
+            client,
+            model=MODEL_NAME,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=_WORKOUT_SYSTEM_PROMPT,
+                temperature=0.2,
+                response_mime_type="application/json",
+                response_schema=WorkoutEstimate,
+            ),
+        )
+    except AIEngineError:
+        raise
+    except Exception as exc:
+        raise AIEngineError(f"Gemini workout request failed: {exc}") from exc
+
+    txt = response.text
+    if not txt:
+        raise AIEngineError("Gemini returned an empty response.")
+    try:
+        return WorkoutEstimate.model_validate_json(txt)
+    except Exception as exc:
+        raise AIEngineError(
+            f"Gemini returned a response that couldn't be parsed as a workout estimate: {exc}"
+        ) from exc
+
+
 # ----------------------------------------------------------------- AI COACH SYSTEM
 
 async def chat_with_coach(
@@ -159,12 +210,15 @@ async def chat_with_coach(
     totals: dict,
     goals: UserGoals,
     workout_goals: str = "",
+    workouts_summary: str = "",
+    weight_trend_summary: str = "",
 ) -> str:
     """Runs a free conversational fitness consultation directly on the client device.
 
     Injects local database macro state (including how much of today's budget
-    is left) plus the user's stated fitness goals, to give the AI context on
-    both what they can still eat today and what they're training for.
+    is left, adjusted for any exercise calories logged today), the user's
+    stated fitness goals, today's logged workouts, and their weight trend --
+    so the coach reasons about the whole picture, not just food macros.
     """
     client = _get_client()
 
@@ -179,7 +233,10 @@ async def chat_with_coach(
         f"- Calories: {totals['calories']} consumed / {goals.daily_calories} target / {remaining_cal} remaining kcal\n"
         f"- Protein: {totals['protein']}g consumed / {goals.daily_protein}g target / {remaining_pro}g remaining\n"
         f"- Carbs: {totals['carbs']}g consumed / {goals.daily_carbs}g target / {remaining_carb}g remaining\n"
-        f"- Fat: {totals['fat']}g consumed / {goals.daily_fat}g target / {remaining_fat}g remaining\n\n"
+        f"- Fat: {totals['fat']}g consumed / {goals.daily_fat}g target / {remaining_fat}g remaining\n"
+        + (f"- Workouts today: {workouts_summary}\n" if workouts_summary.strip() else "")
+        + (f"- Weight trend: {weight_trend_summary}\n" if weight_trend_summary.strip() else "")
+        + "\n"
         + (f"[USER'S STATED FITNESS GOALS]: {workout_goals}\n\n" if workout_goals.strip() else "")
         + f"Answer the user's question with these metrics explicitly in mind."
     )

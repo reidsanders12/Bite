@@ -2,10 +2,13 @@
 Cloud Data Layer via Supabase PostgreSQL.
 Handles multi-user row scoping utilizing authenticated user session identifiers.
 """
+import secrets
+import string
+from datetime import date, timedelta
 from typing import List, Optional
 from supabase import create_client, Client
 from app.config import SUPABASE_URL, SUPABASE_ANON_KEY
-from app.models import UserGoals
+from app.models import Circle, CircleMemberStatus, UserGoals
 
 class Database:
     def __init__(self):
@@ -122,17 +125,31 @@ class Database:
             print(f"[Supabase Sync Error] Failed to fetch today's logs: {e}")
             return []
 
-    def delete_log_entry(self, entry_id: int):
-        """Deletes a target row verifying match parameters against entry id and user id."""
+    def delete_log_entry(self, entry_id: int) -> tuple[bool, str]:
+        """Deletes a target row verifying match parameters against entry id and user id.
+
+        Returns (success, error_message). Supabase's delete() doesn't raise
+        when RLS blocks it -- it just deletes zero rows and reports success
+        at the HTTP level -- so this checks response.data instead of trusting
+        the absence of an exception.
+        """
         uid = self.get_current_user_id()
         if not uid:
-            return
+            return False, "No active user session."
 
         try:
             # Double check user ownership prior to processing structural database drop queries
-            self.client.table("food_logs").delete().eq("id", entry_id).eq("user_id", uid).execute()
+            response = (
+                self.client.table("food_logs").delete().eq("id", entry_id).eq("user_id", uid).execute()
+            )
+            if not response.data:
+                msg = "Delete was blocked (0 rows affected) -- check the DELETE RLS policy on food_logs."
+                print(f"[Supabase Sync Error] {msg}")
+                return False, msg
+            return True, ""
         except Exception as e:
             print(f"[Supabase Sync Error] Failed to purge remote row: {e}")
+            return False, str(e)
 
     def save_goals(self, goals: UserGoals) -> tuple[bool, str]:
         """Updates the existing goals row for this user, or inserts one if
@@ -197,3 +214,403 @@ class Database:
         except Exception as e:
             print(f"[Supabase Sync Error] Failed to read remote goals: {e}")
             return None
+
+    # --- FRIEND CIRCLES ---
+
+    @staticmethod
+    def _row_to_circle(row: dict) -> Circle:
+        return Circle(
+            id=row["id"], name=row["name"], goal_description=row["goal_description"],
+            goal_type=row.get("goal_type", "custom"), goal_value=row.get("goal_value"),
+            invite_code=row["invite_code"], created_by=row["created_by"],
+        )
+
+    def create_circle(
+        self, name: str, goal_description: str, display_name: str,
+        goal_type: str = "custom", goal_value: Optional[int] = None,
+    ) -> tuple[Optional[Circle], str]:
+        """Creates a new circle with a fresh invite code and joins the creator to it."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return None, "No active user session."
+
+        invite_code = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
+        try:
+            response = (
+                self.client.table("circles")
+                .insert({
+                    "name": name,
+                    "goal_description": goal_description,
+                    "goal_type": goal_type,
+                    "goal_value": goal_value,
+                    "invite_code": invite_code,
+                    "created_by": uid,
+                })
+                .execute()
+            )
+            row = response.data[0]
+            self.client.table("circle_members").insert({
+                "circle_id": row["id"],
+                "user_id": uid,
+                "display_name": display_name,
+            }).execute()
+            return self._row_to_circle(row), ""
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to create circle: {e}")
+            return None, str(e)
+
+    def join_circle(self, invite_code: str, display_name: str) -> tuple[Optional[Circle], str]:
+        """Looks up a circle by its invite code and adds the caller as a member."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return None, "No active user session."
+
+        try:
+            found = (
+                self.client.table("circles")
+                .select("*")
+                .eq("invite_code", invite_code.strip().upper())
+                .execute()
+            )
+            if not found.data:
+                return None, "No circle found with that invite code."
+            row = found.data[0]
+
+            self.client.table("circle_members").insert({
+                "circle_id": row["id"],
+                "user_id": uid,
+                "display_name": display_name,
+            }).execute()
+            return self._row_to_circle(row), ""
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to join circle: {e}")
+            return None, str(e)
+
+    def get_my_circles(self) -> List[Circle]:
+        """Returns every circle the caller is a member of."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return []
+
+        try:
+            memberships = (
+                self.client.table("circle_members").select("circle_id").eq("user_id", uid).execute()
+            )
+            circle_ids = [m["circle_id"] for m in (memberships.data or [])]
+            if not circle_ids:
+                return []
+
+            circles = self.client.table("circles").select("*").in_("id", circle_ids).execute()
+            return [self._row_to_circle(row) for row in (circles.data or [])]
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to fetch circles: {e}")
+            return []
+
+    def update_circle_goal(
+        self, circle_id: int, goal_description: str, goal_type: str, goal_value: Optional[int],
+    ) -> tuple[bool, str]:
+        """Updates a circle's goal. RLS (circles_update_own) already restricts
+        this to the circle's creator -- no need to re-check that here."""
+        try:
+            response = (
+                self.client.table("circles")
+                .update({
+                    "goal_description": goal_description,
+                    "goal_type": goal_type,
+                    "goal_value": goal_value,
+                })
+                .eq("id", circle_id)
+                .execute()
+            )
+            if not response.data:
+                msg = "Update was blocked -- only the circle's creator can edit its goal."
+                print(f"[Supabase Sync Error] {msg}")
+                return False, msg
+            return True, ""
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to update circle goal: {e}")
+            return False, str(e)
+
+    def delete_circle(self, circle_id: int) -> tuple[bool, str]:
+        """Deletes a circle outright (creator-only, enforced by the
+        circles_delete_own RLS policy). circle_members/circle_checkins rows
+        cascade-delete automatically via their FK ON DELETE CASCADE."""
+        try:
+            response = self.client.table("circles").delete().eq("id", circle_id).execute()
+            if not response.data:
+                msg = "Delete was blocked -- only the circle's creator can delete it."
+                print(f"[Supabase Sync Error] {msg}")
+                return False, msg
+            return True, ""
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to delete circle: {e}")
+            return False, str(e)
+
+    def leave_circle(self, circle_id: int) -> None:
+        """Removes the caller's own membership row from a circle."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return
+
+        try:
+            self.client.table("circle_members").delete().eq("circle_id", circle_id).eq("user_id", uid).execute()
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to leave circle: {e}")
+
+    def check_in(self, circle_id: int) -> None:
+        """Records that the caller met their circle's goal today (idempotent per day)."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return
+
+        try:
+            self.client.table("circle_checkins").insert({
+                "circle_id": circle_id,
+                "user_id": uid,
+                "checkin_date": date.today().isoformat(),
+            }).execute()
+        except Exception as e:
+            # Expected (and harmless) once today's row already exists --
+            # the unique (circle_id, user_id, checkin_date) constraint blocks
+            # a duplicate check-in for the same day.
+            print(f"[Supabase Sync Error] Check-in not recorded (likely already checked in today): {e}")
+
+    def get_circle_status(self, circle_id: int) -> List[CircleMemberStatus]:
+        """Returns every member's today/streak status for one circle.
+
+        Streaks are computed here in Python from raw checkin dates rather
+        than in SQL -- keeps the RLS policies simple (plain row visibility,
+        no security-definer function) at the cost of pulling a bounded
+        window of rows (last 60 days) per call.
+        """
+        try:
+            members = (
+                self.client.table("circle_members")
+                .select("user_id, display_name")
+                .eq("circle_id", circle_id)
+                .execute()
+            )
+            window_start = (date.today() - timedelta(days=60)).isoformat()
+            checkins = (
+                self.client.table("circle_checkins")
+                .select("user_id, checkin_date")
+                .eq("circle_id", circle_id)
+                .gte("checkin_date", window_start)
+                .execute()
+            )
+
+            dates_by_user: dict[str, set] = {}
+            for row in (checkins.data or []):
+                dates_by_user.setdefault(row["user_id"], set()).add(row["checkin_date"])
+
+            today = date.today()
+            statuses = []
+            for member in (members.data or []):
+                uid = member["user_id"]
+                member_dates = dates_by_user.get(uid, set())
+
+                streak = 0
+                cursor = today
+                while cursor.isoformat() in member_dates:
+                    streak += 1
+                    cursor -= timedelta(days=1)
+
+                statuses.append(CircleMemberStatus(
+                    user_id=uid,
+                    display_name=member["display_name"],
+                    checked_in_today=today.isoformat() in member_dates,
+                    streak_days=streak,
+                ))
+            return statuses
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to fetch circle status: {e}")
+            return []
+
+    # --- WORKOUT LOGS ---
+
+    def log_workout(self, name: str, duration_minutes: int, calories_burned: int) -> None:
+        """Inserts a new workout entry scoped to the active signed-in user."""
+        uid = self.get_current_user_id()
+        if not uid:
+            print("[Supabase Sync Error] Aborting workout write: No active user session.")
+            return
+
+        try:
+            self.client.table("workout_logs").insert({
+                "user_id": uid,
+                "workout_name": name,
+                "duration_minutes": int(duration_minutes),
+                "calories_burned": int(calories_burned),
+            }).execute()
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to log workout: {e}")
+
+    def get_workout_logs_for_date(self, date_iso: str) -> List[dict]:
+        """Fetches the caller's workout entries created on the given local date."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return []
+
+        try:
+            response = (
+                self.client.table("workout_logs")
+                .select("*")
+                .eq("user_id", uid)
+                .gte("created_at", f"{date_iso}T00:00:00")
+                .lte("created_at", f"{date_iso}T23:59:59.999999")
+                .order("id", desc=True)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to fetch today's workouts: {e}")
+            return []
+
+    def get_all_workout_logs(self) -> List[dict]:
+        """Fetches the caller's full all-time workout history."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return []
+
+        try:
+            response = (
+                self.client.table("workout_logs")
+                .select("*")
+                .eq("user_id", uid)
+                .order("id", desc=True)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to fetch workout history: {e}")
+            return []
+
+    def delete_workout_log(self, entry_id: int) -> tuple[bool, str]:
+        """Deletes a workout entry. See delete_log_entry for why response.data
+        is checked instead of trusting the absence of an exception."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            response = (
+                self.client.table("workout_logs").delete().eq("id", entry_id).eq("user_id", uid).execute()
+            )
+            if not response.data:
+                msg = "Delete was blocked (0 rows affected) -- check the DELETE RLS policy on workout_logs."
+                print(f"[Supabase Sync Error] {msg}")
+                return False, msg
+            return True, ""
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to delete workout: {e}")
+            return False, str(e)
+
+    # --- WEIGHT LOGS ---
+
+    def log_weight(self, weight_kg: float) -> None:
+        """Inserts a new weight entry (always stored in kg) for the active user."""
+        uid = self.get_current_user_id()
+        if not uid:
+            print("[Supabase Sync Error] Aborting weight write: No active user session.")
+            return
+
+        try:
+            self.client.table("weight_logs").insert({
+                "user_id": uid,
+                "weight_kg": float(weight_kg),
+            }).execute()
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to log weight: {e}")
+
+    def get_weight_history(self) -> List[dict]:
+        """Fetches the caller's full weight history, oldest first (for a trend chart)."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return []
+
+        try:
+            response = (
+                self.client.table("weight_logs")
+                .select("*")
+                .eq("user_id", uid)
+                .order("created_at", desc=False)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to fetch weight history: {e}")
+            return []
+
+    def delete_weight_log(self, entry_id: int) -> tuple[bool, str]:
+        """Deletes a weight entry. See delete_log_entry for why response.data
+        is checked instead of trusting the absence of an exception."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            response = (
+                self.client.table("weight_logs").delete().eq("id", entry_id).eq("user_id", uid).execute()
+            )
+            if not response.data:
+                msg = "Delete was blocked (0 rows affected) -- check the DELETE RLS policy on weight_logs."
+                print(f"[Supabase Sync Error] {msg}")
+                return False, msg
+            return True, ""
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to delete weight entry: {e}")
+            return False, str(e)
+
+    # --- SPONSORS ---
+
+    def get_active_sponsors(self) -> List[dict]:
+        """Fetches approved + active sponsor rows for the home screen promo slot."""
+        try:
+            response = (
+                self.client.table("sponsors")
+                .select("*")
+                .eq("active", True)
+                .eq("status", "approved")
+                .order("sort_order", desc=False)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to fetch sponsors: {e}")
+            return []
+
+    def get_all_sponsors(self) -> List[dict]:
+        """Fetches every sponsor row regardless of status, for the in-app
+        Sponsor Requests review screen. Only returns rows if the caller's
+        email matches the sponsors_select_owner RLS policy -- everyone else
+        gets an empty list back (silently, not an error)."""
+        try:
+            response = (
+                self.client.table("sponsors")
+                .select("*")
+                .order("created_at", desc=True)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to fetch sponsor requests: {e}")
+            return []
+
+    def update_sponsor_status(self, sponsor_id: int, status: str, active: bool) -> tuple[bool, str]:
+        """Approves/rejects a sponsor request. Restricted to the owner email
+        by the sponsors_update_owner RLS policy."""
+        try:
+            response = (
+                self.client.table("sponsors")
+                .update({"status": status, "active": active})
+                .eq("id", sponsor_id)
+                .execute()
+            )
+            if not response.data:
+                msg = "Update was blocked -- only the configured admin account can review sponsors."
+                print(f"[Supabase Sync Error] {msg}")
+                return False, msg
+            return True, ""
+        except Exception as e:
+            print(f"[Supabase Sync Error] Failed to update sponsor status: {e}")
+            return False, str(e)

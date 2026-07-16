@@ -1,16 +1,35 @@
 """
 Main Home Dashboard View - Modern Minimalist Edition.
 """
+import random
+
 import flet as ft
+from app import promotions
 from app import theme
 from app.state import AppState
 
 def build_home_view(page: ft.Page, state: AppState) -> ft.View:
     if hasattr(state, "refresh_logs"):
         state.refresh_logs()
+    if hasattr(state, "refresh_circles"):
+        state.refresh_circles()
+    if hasattr(state, "refresh_workouts"):
+        state.refresh_workouts()
+    if hasattr(state, "refresh_sponsors"):
+        state.refresh_sponsors()
+
+    def rerender() -> None:
+        # See the matching comment in circles_view.py -- rebuilds this view
+        # fresh and swaps it into the stack, rather than relying on
+        # page.go("/") to redraw a route we're already on.
+        page.views[-1] = build_home_view(page, state)
+        page.update()
 
     daily_logs = state.get_daily_logs() if hasattr(state, "get_daily_logs") else getattr(state, "logs", [])
     goals = state.get_goals() if hasattr(state, "get_goals") else getattr(state, "goals", None)
+    circles = state.get_circles() if hasattr(state, "get_circles") else []
+    daily_workouts = state.get_daily_workouts() if hasattr(state, "get_daily_workouts") else []
+    my_uid = state.db.get_current_user_id() if hasattr(state, "db") else None
 
     # Defensively compute macros
     consumed_cal, consumed_pro, consumed_carb, consumed_fat = 0, 0, 0, 0
@@ -27,51 +46,90 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
     target_carb = int(getattr(goals, "daily_carbs", 200) if not isinstance(goals, dict) else goals.get("daily_carbs", 200))
     target_fat = int(getattr(goals, "daily_fat", 65) if not isinstance(goals, dict) else goals.get("daily_fat", 65))
 
-    cal_progress = min(1.0, consumed_cal / max(1, target_cal))
+    # Logged exercise adds back to today's calorie budget (Goal + Exercise -
+    # Food = Remaining), same convention as MyFitnessPal/most calorie trackers.
+    burned_today = 0
+    for w in (daily_workouts or []):
+        try:
+            burned_today += int(w.get("calories_burned", 0) if isinstance(w, dict) else getattr(w, "calories_burned", 0))
+        except (TypeError, ValueError):
+            pass
+
+    adjusted_target_cal = target_cal + burned_today
+    cal_progress = min(1.0, consumed_cal / max(1, adjusted_target_cal))
 
     # --- NEW MODERN UI ELEMENTS ---
     
-    # Sleek Pill-Shaped Action Controls - Three Column Layout
-    logging_shortcuts = ft.Row([
-        ft.Container(
-            content=ft.Row([
-                ft.Icon(ft.Icons.SUBTITLES_OUTLINED, size=15, color=theme.TEXT_PRIMARY),
-                ft.Text("Text Log", size=12, weight="w600")
-            ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
-            bgcolor=theme.BG_SURFACE_ALT,
-            border=ft.border.all(1, theme.BORDER),
-            border_radius=theme.RADIUS_LG,
-            padding=ft.padding.symmetric(12, 10),
-            on_click=lambda _: page.go("/text_log"),
-            expand=True
-        ),
-        ft.Container(
-            content=ft.Row([
-                ft.Icon(ft.Icons.SEARCH_ROUNDED, size=15, color=theme.TEXT_PRIMARY),
-                ft.Text("Lookup", size=12, weight="w600")
-            ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
-            bgcolor=theme.BG_SURFACE_ALT,
-            border=ft.border.all(1, theme.BORDER),
-            border_radius=theme.RADIUS_LG,
-            padding=ft.padding.symmetric(12, 10),
-            on_click=lambda _: page.go("/lookup"),
-            expand=True
-        ),
-        ft.Container(
-            content=ft.Row([
-                ft.Icon(ft.Icons.CAMERA_ALT_OUTLINED, size=15, color=theme.ACCENT_ON),
-                ft.Text("Snap", size=12, weight="bold", color=theme.ACCENT_ON)
-            ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
-            bgcolor=theme.ACCENT,
-            border_radius=theme.RADIUS_LG,
-            padding=ft.padding.symmetric(12, 10),
-            on_click=lambda _: page.go("/snap"),
-            expand=True
-        )
+    # Sleek Pill-Shaped Action Controls -- top row is the three core food-log
+    # actions, second row is the lower-frequency workout/weight logging.
+    logging_shortcuts = ft.Column([
+        ft.Row([
+            ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.SUBTITLES_OUTLINED, size=15, color=theme.TEXT_PRIMARY),
+                    ft.Text("Text Log", size=12, weight="w600")
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+                bgcolor=theme.BG_SURFACE_ALT,
+                border=ft.border.all(1, theme.BORDER),
+                border_radius=theme.RADIUS_LG,
+                padding=ft.padding.symmetric(12, 10),
+                on_click=lambda _: page.go("/text_log"),
+                expand=True
+            ),
+            ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.SEARCH_ROUNDED, size=15, color=theme.TEXT_PRIMARY),
+                    ft.Text("Lookup", size=12, weight="w600")
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+                bgcolor=theme.BG_SURFACE_ALT,
+                border=ft.border.all(1, theme.BORDER),
+                border_radius=theme.RADIUS_LG,
+                padding=ft.padding.symmetric(12, 10),
+                on_click=lambda _: page.go("/lookup"),
+                expand=True
+            ),
+            ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.CAMERA_ALT_OUTLINED, size=15, color=theme.ACCENT_ON),
+                    ft.Text("Snap", size=12, weight="bold", color=theme.ACCENT_ON)
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+                bgcolor=theme.ACCENT,
+                border_radius=theme.RADIUS_LG,
+                padding=ft.padding.symmetric(12, 10),
+                on_click=lambda _: page.go("/snap"),
+                expand=True
+            ),
+        ], spacing=10),
+        ft.Row([
+            ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.FITNESS_CENTER_ROUNDED, size=15, color=theme.TEXT_PRIMARY),
+                    ft.Text("Workout", size=12, weight="w600")
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+                bgcolor=theme.BG_SURFACE_ALT,
+                border=ft.border.all(1, theme.BORDER),
+                border_radius=theme.RADIUS_LG,
+                padding=ft.padding.symmetric(12, 10),
+                on_click=lambda _: page.go("/log_workout"),
+                expand=True
+            ),
+            ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.MONITOR_WEIGHT_OUTLINED, size=15, color=theme.TEXT_PRIMARY),
+                    ft.Text("Weight", size=12, weight="w600")
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+                bgcolor=theme.BG_SURFACE_ALT,
+                border=ft.border.all(1, theme.BORDER),
+                border_radius=theme.RADIUS_LG,
+                padding=ft.padding.symmetric(12, 10),
+                on_click=lambda _: page.go("/weight"),
+                expand=True
+            ),
+        ], spacing=10),
     ], spacing=10)
 
     # Progress Overview Box: calorie ring gauge + macro meters
-    remaining_cal = max(0, target_cal - consumed_cal)
+    remaining_cal = max(0, adjusted_target_cal - consumed_cal)
     calorie_ring = ft.Stack(
         [
             ft.ProgressRing(
@@ -104,6 +162,12 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 spacing=8,
             ),
             ft.Row(
+                [ft.Icon(ft.Icons.FITNESS_CENTER_ROUNDED, size=16, color=theme.TEXT_MUTED),
+                 ft.Text("Exercise", size=13, color=theme.TEXT_MUTED, expand=True),
+                 ft.Text(f"+{burned_today:,}", size=13, weight="w600", color=theme.TEXT_PRIMARY)],
+                spacing=8,
+            ) if burned_today else ft.Container(),
+            ft.Row(
                 [ft.Icon(ft.Icons.RESTAURANT_OUTLINED, size=16, color=theme.TEXT_MUTED),
                  ft.Text("Food", size=13, color=theme.TEXT_MUTED, expand=True),
                  ft.Text(f"{consumed_cal:,}", size=13, weight="w600", color=theme.TEXT_PRIMARY)],
@@ -117,7 +181,10 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
     progress_card = ft.Container(
         content=ft.Column([
             ft.Text("Calories", size=17, weight="bold", color=theme.TEXT_PRIMARY, font_family=theme.DISPLAY_FONT),
-            ft.Text("Remaining = Goal − Food", size=12, color=theme.TEXT_FAINT),
+            ft.Text(
+                "Remaining = Goal + Exercise − Food" if burned_today else "Remaining = Goal − Food",
+                size=12, color=theme.TEXT_FAINT,
+            ),
             ft.Row(
                 [calorie_ring, calorie_breakdown],
                 alignment=ft.MainAxisAlignment.SPACE_AROUND,
@@ -180,6 +247,112 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 )
             )
 
+    # Circle Goal Cards -- only shown once the user has joined/created one
+    circle_cards = ft.Column(spacing=10)
+    for circle in circles:
+        members = state.get_circle_status(circle.id) if hasattr(state, "get_circle_status") else []
+        my_status = next((m for m in members if m.user_id == my_uid), None)
+        checked_in_today = bool(my_status and my_status.checked_in_today)
+        streak_days = my_status.streak_days if my_status else 0
+
+        is_auto = circle.goal_type != "custom"
+
+        def make_checkin_handler(circle_id):
+            def handler(e):
+                state.check_in_circle(circle_id)
+                rerender()
+            return handler
+
+        status_icon = ft.Icon(
+            ft.Icons.CHECK_CIRCLE if checked_in_today else ft.Icons.RADIO_BUTTON_UNCHECKED,
+            color=theme.SUCCESS if checked_in_today else theme.TEXT_FAINT,
+            size=22,
+        ) if is_auto else ft.IconButton(
+            icon=ft.Icons.CHECK_CIRCLE if checked_in_today else ft.Icons.RADIO_BUTTON_UNCHECKED,
+            icon_color=theme.SUCCESS if checked_in_today else theme.TEXT_FAINT,
+            tooltip="Checked in for today" if checked_in_today else "Mark today's goal done",
+            disabled=checked_in_today,
+            on_click=make_checkin_handler(circle.id),
+        )
+
+        circle_cards.controls.append(
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text(circle.name, size=14, weight="w600", color=theme.TEXT_PRIMARY),
+                                ft.Text(circle.goal_description, size=12, color=theme.TEXT_MUTED),
+                                ft.Text(f"{streak_days}d streak", size=11, color=theme.TEXT_FAINT),
+                            ],
+                            expand=True,
+                            spacing=2,
+                        ),
+                        status_icon,
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=14, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE,
+                border=ft.border.all(1, theme.BORDER), shadow=theme.CARD_SHADOW,
+                on_click=lambda e: page.go("/circles"),
+            )
+        )
+
+    # Today's Workouts -- only shown once at least one is logged today
+    workout_items = ft.Column(spacing=10)
+    for w in daily_workouts:
+        w_name = w.get("workout_name", "Workout") if isinstance(w, dict) else getattr(w, "workout_name", "Workout")
+        w_dur = w.get("duration_minutes", 0) if isinstance(w, dict) else getattr(w, "duration_minutes", 0)
+        w_cal = w.get("calories_burned", 0) if isinstance(w, dict) else getattr(w, "calories_burned", 0)
+        workout_items.controls.append(
+            ft.Container(
+                content=ft.Row(
+                    [
+                        ft.Icon(ft.Icons.FITNESS_CENTER_ROUNDED, size=18, color=theme.ACCENT),
+                        ft.Text(w_name, size=14, weight="w600", color=theme.TEXT_PRIMARY, expand=True),
+                        ft.Text(
+                            f"{w_dur or 0} min" + (f" • {w_cal} kcal" if w_cal else ""),
+                            size=12, color=theme.TEXT_MUTED,
+                        ),
+                    ],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                padding=14, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE,
+                border=ft.border.all(1, theme.BORDER), shadow=theme.CARD_SHADOW,
+            )
+        )
+
+    # Promotions -- active sponsor rows come from Supabase's `sponsors`
+    # table, managed entirely via the Supabase Table Editor (no admin UI in
+    # this codebase). One is picked at random each home load as a simple
+    # rotation across multiple active sponsors.
+    sponsors = state.get_sponsors() if hasattr(state, "get_sponsors") else []
+    if sponsors:
+        sponsor = random.choice(sponsors)
+        promo_card = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(promotions.icon_for(sponsor.get("icon_name")), size=26, color=theme.ACCENT),
+                    ft.Column(
+                        [
+                            ft.Text(sponsor.get("sponsor_label", "Sponsored"), size=10, weight="bold", color=theme.TEXT_FAINT),
+                            ft.Text(sponsor.get("title", ""), size=14, weight="w600", color=theme.TEXT_PRIMARY),
+                            ft.Text(sponsor.get("subtitle", ""), size=12, color=theme.TEXT_MUTED),
+                        ],
+                        expand=True,
+                        spacing=2,
+                    ),
+                    ft.Text(sponsor.get("cta_text", "Learn More"), size=12, weight="bold", color=theme.ACCENT),
+                ],
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            padding=16, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE_ALT,
+            border=ft.border.all(1, theme.BORDER),
+        )
+    else:
+        promo_card = ft.Container()
+
     return ft.View(
         route="/",
         bgcolor=theme.BG_CANVAS,
@@ -189,6 +362,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 leading=ft.IconButton(icon=ft.Icons.ACCOUNT_CIRCLE_OUTLINED, icon_color=theme.TEXT_MUTED, on_click=lambda _: page.go("/profile")),
                 actions=[
                     ft.IconButton(icon=ft.Icons.CHAT_BUBBLE_OUTLINE_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="AI Coach", on_click=lambda _: page.go("/coach")),
+                    ft.IconButton(icon=ft.Icons.GROUPS_OUTLINED, icon_color=theme.TEXT_MUTED, tooltip="Friend Circles", on_click=lambda _: page.go("/circles")),
                     ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="History", on_click=lambda _: page.go("/history")),
                 ],
                 bgcolor=theme.BG_CANVAS, elevation=0
@@ -199,8 +373,33 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                     ft.Divider(color="transparent", height=4),
                     logging_shortcuts,
                     ft.Divider(color="transparent", height=4),
+                    ft.Column(
+                        [
+                            ft.Text("YOUR CIRCLES", size=11, color=theme.TEXT_FAINT, weight="w700"),
+                            circle_cards,
+                        ],
+                        spacing=10,
+                    ) if circles else ft.Container(),
+                    ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Text("TODAY'S WORKOUTS", size=11, color=theme.TEXT_FAINT, weight="w700", expand=True),
+                                    ft.TextButton(
+                                        "View All",
+                                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                                        on_click=lambda e: page.go("/workout_history"),
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            ),
+                            workout_items,
+                        ],
+                        spacing=0,
+                    ) if daily_workouts else ft.Container(),
                     ft.Text("TODAY'S LINEUP", size=11, color=theme.TEXT_FAINT, weight="w700"),
-                    timeline_items
+                    timeline_items,
+                    promo_card,
                 ], spacing=18, scroll=ft.ScrollMode.AUTO),
                 padding=ft.padding.symmetric(20, 24), expand=True
             )

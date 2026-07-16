@@ -7,7 +7,7 @@ small is what lets us skip writing any JSON-parsing / regex defensive code
 downstream -- Gemini simply cannot return anything else.
 """
 
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -45,8 +45,33 @@ class MacroBreakdown(BaseModel):
         )
 
 
+class WorkoutEstimate(BaseModel):
+    workout_name: str = Field(description="A clean, concise name for the workout")
+    duration_minutes: int = Field(description="Estimated duration of the workout in minutes")
+    calories_burned: int = Field(description="Estimated total calories burned during the workout")
+
+
 class UserGoals(BaseModel):
     daily_calories: int = 2200
     daily_protein: int = 150
     daily_carbs: int = 220
     daily_fat: int = 70
+
+
+class Circle(BaseModel):
+    id: int
+    name: str
+    goal_description: str
+    # 'custom' (manual check-in), 'workout' (auto check-in on any workout
+    # log), or 'calories' (auto check-in once today's calories >= goal_value).
+    goal_type: str = "custom"
+    goal_value: Optional[int] = None
+    invite_code: str
+    created_by: str
+
+
+class CircleMemberStatus(BaseModel):
+    user_id: str
+    display_name: str
+    checked_in_today: bool = False
+    streak_days: int = 0

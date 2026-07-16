@@ -56,4 +56,9 @@ if not SUPABASE_URL or not SUPABASE_ANON_KEY:
 SUPABASE_URL = SUPABASE_URL.strip()
 SUPABASE_ANON_KEY = SUPABASE_ANON_KEY.strip()
 
+# 5. Optional: the email address that unlocks the in-app "Sponsor Requests"
+# review screen (Profile -> Sponsor Requests). Left blank, that screen stays
+# hidden for everyone -- this isn't a hard requirement like the keys above.
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
+
 print("[CONFIG DEBUG] All keys loaded and verified cleanly via manual parser fallback!")

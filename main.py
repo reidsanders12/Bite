@@ -7,22 +7,32 @@ from app import theme
 
 from app.state import AppState
 from app.views.auth_view import build_auth_view
+from app.views.circles_view import build_circles_view
 from app.views.coach_view import build_coach_view
 from app.views.confirm_view import build_confirm_view
 from app.views.history_view import build_history_view
 from app.views.home_view import build_home_view
+from app.views.log_workout_view import build_log_workout_view
 from app.views.lookup_view import build_lookup_view
 from app.views.settings_view import build_settings_view
 from app.views.snap_view import build_snap_view
 from app.views.survey_view import build_survey_view
 from app.views.text_log_view import build_text_log_view
 from app.views.profile_view import build_profile_view
+from app.views.sponsor_requests_view import build_sponsor_requests_view
+from app.views.weight_view import build_weight_view
+from app.views.workout_history_view import build_workout_history_view
 
 # 2. Append it cleanly inside your VIEW_BUILDERS map allocation table
 VIEW_BUILDERS = {
     "/auth": build_auth_view,
     "/": build_home_view,
-    "/profile": build_profile_view,  
+    "/profile": build_profile_view,
+    "/circles": build_circles_view,
+    "/log_workout": build_log_workout_view,
+    "/workout_history": build_workout_history_view,
+    "/weight": build_weight_view,
+    "/sponsor_requests": build_sponsor_requests_view,
     "/snap": build_snap_view,
     "/confirm": build_confirm_view,
     "/history": build_history_view,

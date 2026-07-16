@@ -8,6 +8,38 @@ from app import theme
 from app.state import AppState
 from app.ai_engine import chat_with_coach, AIEngineError
 
+LB_PER_KG = 2.20462
+
+
+def _summarize_workouts(daily_workouts: list) -> str:
+    if not daily_workouts:
+        return "none logged today"
+    parts = []
+    for w in daily_workouts:
+        name = w.get("workout_name") if isinstance(w, dict) else getattr(w, "workout_name", "Workout")
+        duration = w.get("duration_minutes", 0) if isinstance(w, dict) else getattr(w, "duration_minutes", 0)
+        calories = w.get("calories_burned", 0) if isinstance(w, dict) else getattr(w, "calories_burned", 0)
+        parts.append(f"{name} ({duration or 0} min, {calories or 0} kcal burned)")
+    return "; ".join(parts)
+
+
+def _summarize_weight_trend(weight_history: list, is_imperial: bool) -> str:
+    if not weight_history:
+        return "no weight logged yet"
+
+    def to_display(weight_kg: float) -> float:
+        return weight_kg * LB_PER_KG if is_imperial else weight_kg
+
+    unit = "lb" if is_imperial else "kg"
+    latest_kg = weight_history[-1].get("weight_kg", 0) if isinstance(weight_history[-1], dict) else getattr(weight_history[-1], "weight_kg", 0)
+    if len(weight_history) == 1:
+        return f"{to_display(latest_kg):.1f}{unit} (only one entry logged so far)"
+
+    first_kg = weight_history[0].get("weight_kg", 0) if isinstance(weight_history[0], dict) else getattr(weight_history[0], "weight_kg", 0)
+    delta = to_display(latest_kg) - to_display(first_kg)
+    direction = "up" if delta > 0 else ("down" if delta < 0 else "flat")
+    return f"currently {to_display(latest_kg):.1f}{unit}, {direction} {abs(delta):.1f}{unit} over {len(weight_history)} logged entries"
+
 
 def _remaining_tile(label: str, remaining: int, unit: str, color: str) -> ft.Control:
     return ft.Container(
@@ -28,9 +60,19 @@ def _remaining_tile(label: str, remaining: int, unit: str, color: str) -> ft.Con
 
 
 def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
+    if hasattr(state, "refresh_workouts"):
+        state.refresh_workouts()
+    if hasattr(state, "refresh_weight_history"):
+        state.refresh_weight_history()
+
     totals = state.get_daily_totals()
     goals = state.goals
     profile = state.get_profile_data() if hasattr(state, "get_profile_data") else {}
+
+    daily_workouts = state.get_daily_workouts() if hasattr(state, "get_daily_workouts") else []
+    weight_history = state.get_weight_history() if hasattr(state, "get_weight_history") else []
+    workouts_summary = _summarize_workouts(daily_workouts)
+    weight_trend_summary = _summarize_weight_trend(weight_history, profile.get("unit_system") == "imperial")
 
     remaining_cal = goals.daily_calories - totals["calories"]
     remaining_pro = goals.daily_protein - totals["protein"]
@@ -103,6 +145,8 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
                 totals,
                 goals,
                 workout_goals=goals_field.value or "",
+                workouts_summary=workouts_summary,
+                weight_trend_summary=weight_trend_summary,
             )
             chat_list.controls.remove(loader)
             chat_list.controls.append(render_bubble(reply, is_user=False))

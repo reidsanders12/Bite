@@ -21,7 +21,7 @@ def _to_float(value, default=None):
 def build_survey_view(page: ft.Page, state) -> ft.View:
     saved = state.get_profile_data() if hasattr(state, "get_profile_data") else {}
 
-    # Track the active wizard step: 0=Biometrics, 1=Activity & Goals, 2=Location
+    # Track the active wizard step: 0=Biometrics, 1=Activity & Goals
     current_step = 0
 
     # Step 1 Controls: Biometrics
@@ -92,13 +92,6 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
             ft.Radio(value="bulk", label="Build Muscle (+200 to +300 kcal)")
         ], spacing=4),
         value=saved.get("goal", "maintain"),
-    )
-
-    # Step 3 Controls: Location
-    location_field = ft.TextField(
-        label="Town / City (optional)", hint_text="e.g. Austin, TX",
-        value=saved.get("location", ""),
-        **theme.styled_field(),
     )
 
     wizard_content = ft.Container()
@@ -204,12 +197,6 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
                 ft.Text("Primary Fitness Target Direction:", size=12, color=theme.TEXT_MUTED),
                 fitness_goal_radio,
             ], spacing=14)
-        elif current_step == 2:
-            wizard_content.content = ft.Column([
-                ft.Text("Step 3: Location", size=18, weight="bold"),
-                ft.Text("Optional — helps us tailor context for you down the line.", size=12, color=theme.TEXT_MUTED),
-                location_field,
-            ], spacing=14)
 
     def on_next(e):
         nonlocal current_step
@@ -220,8 +207,6 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
                 return
             current_step = 1
         elif current_step == 1:
-            current_step = 2
-        elif current_step == 2:
             # Complete the survey flow: calculate + save goals, then remember
             # every input so this screen can pre-fill itself next time.
             calculated_goals = calculate_macro_targets()
@@ -246,7 +231,6 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
                 "unit_system": unit_toggle.value,
                 "activity": activity_dropdown.value,
                 "goal": fitness_goal_radio.value,
-                "location": (location_field.value or "").strip(),
             }
             if unit_toggle.value == "imperial":
                 profile_snapshot["weight_lb"] = _to_float(weight_lb_field.value)
