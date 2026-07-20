@@ -54,13 +54,9 @@ def main(page: ft.Page):
     state = AppState()
 
     def route_change(e):
-            print(f"Routing to active scene viewport target: {page.route}")
-            
-            # Explicitly clear the layout views completely 
             page.views.clear()
-            
+
             try:
-                # Force refresh the data arrays inside your state context right now
                 if hasattr(state, "refresh_logs"):
                     state.refresh_logs()
                 if hasattr(state, "refresh_goals"):

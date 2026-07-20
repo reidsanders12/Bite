@@ -203,8 +203,13 @@ To ship as a real mobile app later: `flet build apk` / `flet build ipa`
   point anywhere in the UI — it's superseded and not part of the current
   app flow. (`coach_view.py` *is* wired up — the chat-bubble icon on the
   home screen's top bar opens it.)
-- `text_log_view.py`'s mic button is a hook, not a full speech-to-text
-  integration — wiring a native STT engine is platform-specific and left as a
-  clearly marked TODO in that file.
+- `text_log_view.py`'s mic button records a short voice note and sends it
+  straight to Gemini for transcription + macro parsing in one multimodal call
+  (`ai_engine.analyze_audio`) — no on-device speech-to-text engine involved,
+  same pattern as photo logging. Desktop and mobile builds get a real audio
+  file Flet can read back; on web, Flet's `AudioRecorder` only hands back a
+  browser-local `blob:` URL with no upload bridge to fetch it server-side, so
+  the mic button is disabled there (tooltip explains why) rather than silently
+  doing nothing.
 - All Gemini/Supabase/Open Food Facts/USDA calls are genuinely live network
   calls made from your own device with your own keys.

@@ -86,6 +86,10 @@ create table if not exists sponsors (
     subtitle text not null,
     cta_text text not null default 'Learn More',
     icon_name text not null default 'campaign',
+    -- Where the home screen's CTA button takes the user -- the sponsor's own
+    -- site, not Bite's. Nullable: a submission without one just renders its
+    -- promo card without a tappable CTA (see home_view.py).
+    website_url text,
     -- 'pending' (just submitted, awaiting your review) -> 'approved' or
     -- 'rejected'. Enforced app-side, not a DB check constraint (kept simple
     -- for a single-developer project, same as circles.goal_type).
@@ -100,14 +104,15 @@ create table if not exists sponsors (
 alter table sponsors add column if not exists status text not null default 'pending';
 alter table sponsors add column if not exists contact_name text;
 alter table sponsors add column if not exists contact_email text;
+alter table sponsors add column if not exists website_url text;
 alter table sponsors alter column active set default false;
 
 -- Seeds one example row, pre-approved, so the home screen isn't empty out
 -- of the box. Only runs if the table is empty, so re-running this file
 -- won't duplicate it or resurrect a row you've since deleted in the
 -- Dashboard.
-insert into sponsors (sponsor_label, title, subtitle, cta_text, icon_name, status, active)
-select 'Sponsored', 'IronWorks Gym', 'New members get 20% off your first 3 months.', 'Learn More', 'fitness_center', 'approved', true
+insert into sponsors (sponsor_label, title, subtitle, cta_text, icon_name, website_url, status, active)
+select 'Sponsored', 'IronWorks Gym', 'New members get 20% off your first 3 months.', 'Learn More', 'fitness_center', 'https://example.com', 'approved', true
 where not exists (select 1 from sponsors);
 
 alter table circles enable row level security;

@@ -18,6 +18,58 @@ def _to_float(value, default=None):
         return default
 
 
+def calculate_macro_targets(
+    age: int, gender: str, activity: float, weight_kg: float, height_cm: float, goal: str,
+) -> UserGoals:
+    """Mifflin-St Jeor BMR -> TDEE -> goal-adjusted calories -> macros.
+
+    Macros are derived in priority order (protein, then fat, then carbs)
+    rather than as a flat calorie-percentage split, per the standard
+    recomp/cut/bulk guidance: protein is set first from bodyweight to
+    protect muscle, fat gets a fixed slice for hormone health, and carbs
+    fill whatever calorie budget is left.
+    """
+    # Mifflin-St Jeor BMR formulation model
+    if gender == "male":
+        bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5
+    else:
+        bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) - 161
+
+    tdee = bmr * activity
+
+    # Goal adjustment: midpoint of the recommended range
+    # (weight loss: -300 to -500 kcal, muscle gain: +200 to +300 kcal)
+    if goal == "cut":
+        target_calories = tdee - 400
+    elif goal == "bulk":
+        target_calories = tdee + 250
+    else:
+        target_calories = tdee
+    target_calories = max(1200, int(target_calories))  # Floor limit to maintain baseline safety margins
+
+    # Protein first: 1.0 g per pound of bodyweight, the midpoint of the
+    # recommended 0.8-1.2 g/lb range. Protein/Carbs = 4 kcal/g.
+    weight_lb_total = weight_kg * LB_PER_KG
+    protein_g = round(weight_lb_total * 1.0)
+    protein_cal = protein_g * 4
+
+    # Fat next: 25% of total calories, the midpoint of the 20-30% range.
+    # Fat = 9 kcal/g.
+    fat_cal = target_calories * 0.25
+    fat_g = round(fat_cal / 9)
+
+    # Carbs fill whatever calorie budget remains.
+    carb_cal = max(0, target_calories - protein_cal - fat_cal)
+    carbs_g = round(carb_cal / 4)
+
+    return UserGoals(
+        daily_calories=target_calories,
+        daily_protein=max(50, protein_g),
+        daily_carbs=max(50, carbs_g),
+        daily_fat=max(30, fat_g),
+    )
+
+
 def build_survey_view(page: ft.Page, state) -> ft.View:
     saved = state.get_profile_data() if hasattr(state, "get_profile_data") else {}
 
@@ -97,14 +149,12 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
     wizard_content = ft.Container()
     status_msg = ft.Text("", color=theme.ERROR, size=12)
 
-    def calculate_macro_targets():
-        """Mifflin-St Jeor BMR -> TDEE -> goal-adjusted calories -> macros.
+    def targets_from_fields():
+        """Parses the current wizard field values and runs calculate_macro_targets.
 
-        Macros are derived in priority order (protein, then fat, then carbs)
-        rather than as a flat calorie-percentage split, per the standard
-        recomp/cut/bulk guidance: protein is set first from bodyweight to
-        protect muscle, fat gets a fixed slice for hormone health, and carbs
-        fill whatever calorie budget is left.
+        Returns None if any biometric field can't be parsed as a number --
+        the widget-parsing step lives here (not in calculate_macro_targets)
+        so that function stays a plain, independently-testable calculation.
         """
         try:
             age = int(age_field.value)
@@ -122,45 +172,9 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
         except (ValueError, TypeError):
             return None
 
-        # Mifflin-St Jeor BMR formulation model
-        if gender_radio.value == "male":
-            bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5
-        else:
-            bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) - 161
-
-        tdee = bmr * activity
-
-        # Goal adjustment: midpoint of the recommended range
-        # (weight loss: -300 to -500 kcal, muscle gain: +200 to +300 kcal)
-        goal = fitness_goal_radio.value
-        if goal == "cut":
-            target_calories = tdee - 400
-        elif goal == "bulk":
-            target_calories = tdee + 250
-        else:
-            target_calories = tdee
-        target_calories = max(1200, int(target_calories))  # Floor limit to maintain baseline safety margins
-
-        # Protein first: 1.0 g per pound of bodyweight, the midpoint of the
-        # recommended 0.8-1.2 g/lb range. Protein/Carbs = 4 kcal/g.
-        weight_lb_total = weight_kg * LB_PER_KG
-        protein_g = round(weight_lb_total * 1.0)
-        protein_cal = protein_g * 4
-
-        # Fat next: 25% of total calories, the midpoint of the 20-30% range.
-        # Fat = 9 kcal/g.
-        fat_cal = target_calories * 0.25
-        fat_g = round(fat_cal / 9)
-
-        # Carbs fill whatever calorie budget remains.
-        carb_cal = max(0, target_calories - protein_cal - fat_cal)
-        carbs_g = round(carb_cal / 4)
-
-        return UserGoals(
-            daily_calories=target_calories,
-            daily_protein=max(50, protein_g),
-            daily_carbs=max(50, carbs_g),
-            daily_fat=max(30, fat_g)
+        return calculate_macro_targets(
+            age=age, gender=gender_radio.value, activity=activity,
+            weight_kg=weight_kg, height_cm=height_cm, goal=fitness_goal_radio.value,
         )
 
     def biometrics_fields_ok() -> bool:
@@ -209,7 +223,7 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
         elif current_step == 1:
             # Complete the survey flow: calculate + save goals, then remember
             # every input so this screen can pre-fill itself next time.
-            calculated_goals = calculate_macro_targets()
+            calculated_goals = targets_from_fields()
             if calculated_goals is None:
                 status_msg.value = "Couldn't calculate your targets — please check your biometric entries."
                 status_msg.color = theme.ERROR

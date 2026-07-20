@@ -1,35 +1,11 @@
 import os
+from dotenv import load_dotenv
 from google import genai
 
-# 1. Manually calculate the absolute path to your root folder
-current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.abspath(os.path.join(current_dir, ".."))
+root_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 env_path = os.path.join(root_dir, ".env")
+load_dotenv(env_path)
 
-print(f"[RAW ENV DEBUG] Checking path: {env_path}")
-
-# 2. Raw File Inspection Loop
-if os.path.exists(env_path):
-    print("[RAW ENV DEBUG] File found! Reading lines manually...")
-    with open(env_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            
-            # Split lines manually to clear out spaces and hidden quotes
-            if "=" in line:
-                key, val = line.split("=", 1)
-                key = key.strip()
-                val = val.strip().strip("'").strip('"')
-                
-                # Dynamically force-inject it into the environment dictionary
-                os.environ[key] = val
-                print(f" -> Successfully parsed key manually: '{key}'")
-else:
-    print(f"[RAW ENV DEBUG] CRITICAL: .env file completely missing from {root_dir}")
-
-# 3. Read back your key allocations
 ai_key = os.getenv("GEMINI_API_KEY")
 usda_key = os.getenv("USDA_API_KEY")
 
@@ -41,10 +17,8 @@ if not ai_key:
         f"Current path checked: {env_path}"
     )
 
-# Initialize your client cleanly
 client = genai.Client(api_key=ai_key)
 
-# 4. Read and validate your Supabase keys
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 
@@ -60,5 +34,3 @@ SUPABASE_ANON_KEY = SUPABASE_ANON_KEY.strip()
 # review screen (Profile -> Sponsor Requests). Left blank, that screen stays
 # hidden for everyone -- this isn't a hard requirement like the keys above.
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
-
-print("[CONFIG DEBUG] All keys loaded and verified cleanly via manual parser fallback!")

@@ -77,6 +77,7 @@ def build_sponsor_requests_view(page: ft.Page, state) -> ft.View:
                         spacing=10,
                     ),
                     ft.Text(f"CTA: \"{s.get('cta_text', '')}\"", size=11, color=theme.TEXT_FAINT),
+                    ft.Text(s["website_url"], size=11, color=theme.ACCENT) if s.get("website_url") else ft.Container(),
                     ft.Text(contact_line, size=11, color=theme.TEXT_FAINT) if contact_line else ft.Container(),
                     actions,
                 ],

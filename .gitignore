@@ -5,3 +5,4 @@ venv/
 build/
 *.db
 .env
+.pytest_cache/

@@ -52,6 +52,13 @@ _TEXT_INSTRUCTION_TEMPLATE = (
     "\"\"\"\n{text}\n\"\"\""
 )
 
+_AUDIO_INSTRUCTION = (
+    "This is a voice recording of someone describing a meal or ingredient "
+    "they just ate. Transcribe what they said, identify individual food "
+    "items, and produce one aggregated macro breakdown for everything "
+    "described. Provide an appropriate descriptive meal_name."
+)
+
 _WORKOUT_SYSTEM_PROMPT = (
     "You are a precise exercise-physiology estimation assistant embedded in a "
     "fitness tracking app. Always respond with your best numeric estimate even "
@@ -148,6 +155,27 @@ async def analyze_image(photo_bytes: bytes) -> MacroBreakdown:
     except Exception as exc:
         raise AIEngineError(f"Gemini multimodal photo request failed: {exc}") from exc
         
+    return _extract(response)
+
+
+async def analyze_audio(audio_bytes: bytes, mime_type: str = "audio/wav") -> MacroBreakdown:
+    """Send a raw voice-log recording to Gemini for structured Pydantic parsing.
+
+    Gemini transcribes and interprets the speech in a single multimodal call
+    -- same "AI does the heavy lifting" pattern as analyze_image, just with
+    an audio Part instead of an image Part.
+    """
+    client = _get_client()
+    try:
+        audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+        response = await _generate_with_retry(
+            client,
+            model=MODEL_NAME,
+            contents=[audio_part, _AUDIO_INSTRUCTION],
+            config=_config(),
+        )
+    except Exception as exc:
+        raise AIEngineError(f"Gemini audio request failed: {exc}") from exc
     return _extract(response)
 
 

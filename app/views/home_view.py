@@ -323,12 +323,13 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         )
 
     # Promotions -- active sponsor rows come from Supabase's `sponsors`
-    # table, managed entirely via the Supabase Table Editor (no admin UI in
-    # this codebase). One is picked at random each home load as a simple
+    # table (submitted via sponsor_signup.html, reviewed from Profile ->
+    # Sponsor Requests). One is picked at random each home load as a simple
     # rotation across multiple active sponsors.
     sponsors = state.get_sponsors() if hasattr(state, "get_sponsors") else []
     if sponsors:
         sponsor = random.choice(sponsors)
+        website_url = sponsor.get("website_url")
         promo_card = ft.Container(
             content=ft.Row(
                 [
@@ -349,6 +350,9 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
             ),
             padding=16, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE_ALT,
             border=ft.border.all(1, theme.BORDER),
+            # Sponsors submitted before this field existed (or who left it
+            # blank) render the same card with no tappable CTA.
+            on_click=(lambda e, url=website_url: page.launch_url(url)) if website_url else None,
         )
     else:
         promo_card = ft.Container()
