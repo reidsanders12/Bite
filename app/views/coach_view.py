@@ -6,7 +6,8 @@ fitness goals, so it can suggest a meal that fits or build you a workout.
 import flet as ft
 from app import theme
 from app.state import AppState
-from app.ai_engine import chat_with_coach, AIEngineError
+from app.ai_engine import chat_with_coach, suggest_meal, suggest_workout, AIEngineError
+from app.models import MealSuggestion, WorkoutPlan
 
 LB_PER_KG = 2.20462
 
@@ -42,10 +43,11 @@ def _summarize_weight_trend(weight_history: list, is_imperial: bool) -> str:
 
 
 def _remaining_tile(label: str, remaining: int, unit: str, color: str) -> ft.Control:
-    return ft.Container(
+    value_text = ft.Text(f"{remaining:,}{unit}", size=17, weight="bold", color=color)
+    tile = ft.Container(
         content=ft.Column(
             [
-                ft.Text(f"{remaining:,}{unit}", size=17, weight="bold", color=color),
+                value_text,
                 ft.Text(label, size=11, color=theme.TEXT_MUTED),
             ],
             spacing=2,
@@ -57,6 +59,8 @@ def _remaining_tile(label: str, remaining: int, unit: str, color: str) -> ft.Con
         expand=True,
         alignment=ft.alignment.center,
     )
+    tile.value_text = value_text  # exposed so the "Still available today" tiles can be refreshed live after a log action
+    return tile
 
 
 def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
@@ -78,6 +82,20 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
     remaining_pro = goals.daily_protein - totals["protein"]
     remaining_carb = goals.daily_carbs - totals["carbs"]
     remaining_fat = goals.daily_fat - totals["fat"]
+
+    kcal_tile = _remaining_tile("kcal", remaining_cal, "", theme.ACCENT)
+    protein_tile = _remaining_tile("protein", remaining_pro, "g", theme.PROTEIN)
+    carbs_tile = _remaining_tile("carbs", remaining_carb, "g", theme.CARBS)
+    fat_tile = _remaining_tile("fat", remaining_fat, "g", theme.FAT)
+
+    def _refresh_remaining_tiles():
+        """Re-pulls today's totals and updates the summary tiles in place, so
+        logging a suggested meal reflects immediately without leaving the screen."""
+        fresh_totals = state.get_daily_totals()
+        kcal_tile.value_text.value = f"{goals.daily_calories - fresh_totals['calories']:,}"
+        protein_tile.value_text.value = f"{goals.daily_protein - fresh_totals['protein']:,}g"
+        carbs_tile.value_text.value = f"{goals.daily_carbs - fresh_totals['carbs']:,}g"
+        fat_tile.value_text.value = f"{goals.daily_fat - fresh_totals['fat']:,}g"
 
     goals_field = ft.TextField(
         value=profile.get("workout_goals", ""),
@@ -122,8 +140,146 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
             alignment=ft.MainAxisAlignment.END if is_user else ft.MainAxisAlignment.START,
         )
 
+    def _stat_pair(exercise) -> ft.Control:
+        detail = f"{exercise.sets} × {exercise.reps}"
+        return ft.Column(
+            [
+                ft.Text(exercise.name, size=13, weight="w600", color=theme.TEXT_PRIMARY),
+                ft.Text(detail, size=12, color=theme.TEXT_MUTED),
+                *([ft.Text(exercise.notes, size=11, color=theme.TEXT_FAINT)] if exercise.notes else []),
+            ],
+            spacing=2,
+        )
+
+    def render_meal_card(suggestion) -> ft.Control:
+        log_status = ft.Text("", size=11, color=theme.SUCCESS)
+        log_button = ft.TextButton(
+            "Log this meal",
+            icon=ft.Icons.ADD_CIRCLE_OUTLINE,
+            style=ft.ButtonStyle(color=theme.ACCENT),
+        )
+
+        def on_log_click(e):
+            try:
+                state.log_food(
+                    name=suggestion.meal_name,
+                    cal=suggestion.calories,
+                    pro=suggestion.protein,
+                    carb=suggestion.carbs,
+                    fat=suggestion.fat,
+                )
+                log_button.disabled = True
+                log_status.value = "Logged to today's timeline"
+                _refresh_remaining_tiles()
+            except Exception as err:
+                log_status.value = f"Couldn't log: {err}"
+                log_status.color = theme.ERROR
+            page.update()
+
+        log_button.on_click = on_log_click
+
+        return theme.surface_card(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.RESTAURANT_MENU, color=theme.ACCENT, size=18),
+                            ft.Text(suggestion.meal_name, size=15, weight="bold", color=theme.TEXT_PRIMARY, expand=True),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Text(suggestion.rationale, size=12, color=theme.TEXT_MUTED),
+                    ft.Row(
+                        [
+                            _remaining_tile("kcal", suggestion.calories, "", theme.ACCENT),
+                            _remaining_tile("protein", suggestion.protein, "g", theme.PROTEIN),
+                            _remaining_tile("carbs", suggestion.carbs, "g", theme.CARBS),
+                            _remaining_tile("fat", suggestion.fat, "g", theme.FAT),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Column(
+                        [ft.Text(f"• {item}", size=13, color=theme.TEXT_PRIMARY) for item in suggestion.ingredients],
+                        spacing=4,
+                    ),
+                    ft.Row([log_button, log_status], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ],
+                spacing=12,
+            ),
+            padding=16,
+        )
+
+    def render_workout_card(plan) -> ft.Control:
+        log_status = ft.Text("", size=11, color=theme.SUCCESS)
+        log_button = ft.TextButton(
+            "Log this workout",
+            icon=ft.Icons.ADD_CIRCLE_OUTLINE,
+            style=ft.ButtonStyle(color=theme.ACCENT),
+        )
+
+        def on_log_click(e):
+            try:
+                state.log_workout(
+                    name=plan.workout_name,
+                    duration_minutes=plan.estimated_duration_minutes,
+                    calories_burned=plan.estimated_calories_burned,
+                )
+                log_button.disabled = True
+                log_status.value = "Logged to today's workouts"
+            except Exception as err:
+                log_status.value = f"Couldn't log: {err}"
+                log_status.color = theme.ERROR
+            page.update()
+
+        log_button.on_click = on_log_click
+
+        return theme.surface_card(
+            ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(ft.Icons.FITNESS_CENTER, color=theme.ACCENT, size=18),
+                            ft.Text(plan.workout_name, size=15, weight="bold", color=theme.TEXT_PRIMARY, expand=True),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Text(plan.rationale, size=12, color=theme.TEXT_MUTED),
+                    ft.Row(
+                        [
+                            _remaining_tile("min", plan.estimated_duration_minutes, "", theme.ACCENT),
+                            _remaining_tile("kcal burned", plan.estimated_calories_burned, "", theme.CARBS),
+                        ],
+                        spacing=8,
+                    ),
+                    ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Text(f"{i + 1}.", size=13, weight="bold", color=theme.TEXT_MUTED, width=18),
+                                    _stat_pair(exercise),
+                                ],
+                                spacing=8,
+                                vertical_alignment=ft.CrossAxisAlignment.START,
+                            )
+                            for i, exercise in enumerate(plan.exercises)
+                        ],
+                        spacing=10,
+                    ),
+                    ft.Row([log_button, log_status], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ],
+                spacing=12,
+            ),
+            padding=16,
+        )
+
     for msg in state.get_chat_history():
-        chat_list.controls.append(render_bubble(msg["text"], msg["is_user"]))
+        kind = msg.get("kind")
+        if kind == "meal":
+            chat_list.controls.append(render_meal_card(MealSuggestion(**msg["data"])))
+        elif kind == "workout":
+            chat_list.controls.append(render_workout_card(WorkoutPlan(**msg["data"])))
+        else:
+            chat_list.controls.append(render_bubble(msg["text"], msg["is_user"]))
 
     async def send_text(text: str):
         text = text.strip()
@@ -164,10 +320,69 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
         await send_text(chat_input.value or "")
 
     async def on_suggest_meal(e):
-        await send_text("Suggest a meal I can eat right now that fits within my remaining macros for today.")
+        user_label = "Suggest a meal"
+        chat_list.controls.append(render_bubble(user_label, is_user=True))
+        state.add_chat_message(user_label, is_user=True)
+
+        loader = ft.Row([ft.ProgressRing(width=20, height=20, color=theme.ACCENT)], alignment=ft.MainAxisAlignment.START)
+        chat_list.controls.append(loader)
+        page.update()
+
+        try:
+            suggestion = await suggest_meal(totals, goals, workout_goals=goals_field.value or "")
+            chat_list.controls.remove(loader)
+            chat_list.controls.append(render_meal_card(suggestion))
+            state.add_chat_message(
+                f"Suggested meal: {suggestion.meal_name} ({suggestion.calories} kcal, "
+                f"{suggestion.protein}g protein, {suggestion.carbs}g carbs, {suggestion.fat}g fat). "
+                f"{suggestion.rationale}",
+                is_user=False,
+                kind="meal",
+                data=suggestion.model_dump(),
+            )
+        except AIEngineError as err:
+            chat_list.controls.remove(loader)
+            chat_list.controls.append(render_bubble(f"Coach couldn't respond: {err}", is_user=False))
+        except Exception as err:
+            chat_list.controls.remove(loader)
+            chat_list.controls.append(render_bubble(f"Coach link failure: {err}", is_user=False))
+
+        page.update()
 
     async def on_suggest_workout(e):
-        await send_text("Based on my stated fitness goals, suggest a workout for today.")
+        user_label = "Suggest a workout"
+        chat_list.controls.append(render_bubble(user_label, is_user=True))
+        state.add_chat_message(user_label, is_user=True)
+
+        loader = ft.Row([ft.ProgressRing(width=20, height=20, color=theme.ACCENT)], alignment=ft.MainAxisAlignment.START)
+        chat_list.controls.append(loader)
+        page.update()
+
+        try:
+            plan = await suggest_workout(
+                totals,
+                goals,
+                workout_goals=goals_field.value or "",
+                workouts_summary=workouts_summary,
+                weight_trend_summary=weight_trend_summary,
+            )
+            chat_list.controls.remove(loader)
+            chat_list.controls.append(render_workout_card(plan))
+            state.add_chat_message(
+                f"Suggested workout: {plan.workout_name} ({plan.estimated_duration_minutes} min, "
+                f"~{plan.estimated_calories_burned} kcal burned). {plan.rationale}",
+                is_user=False,
+                kind="workout",
+                data=plan.model_dump(),
+            )
+        except AIEngineError as err:
+            chat_list.controls.remove(loader)
+            chat_list.controls.append(render_bubble(f"Coach couldn't respond: {err}", is_user=False))
+        except Exception as err:
+            chat_list.controls.remove(loader)
+            chat_list.controls.append(render_bubble(f"Coach link failure: {err}", is_user=False))
+
+        page.update()
 
     chat_input.on_submit = lambda e: page.run_task(on_send_click, e)
 
@@ -186,12 +401,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
                                 [
                                     ft.Text("Still available today", size=13, weight="bold", color=theme.TEXT_PRIMARY),
                                     ft.Row(
-                                        [
-                                            _remaining_tile("kcal", remaining_cal, "", theme.ACCENT),
-                                            _remaining_tile("protein", remaining_pro, "g", theme.PROTEIN),
-                                            _remaining_tile("carbs", remaining_carb, "g", theme.CARBS),
-                                            _remaining_tile("fat", remaining_fat, "g", theme.FAT),
-                                        ],
+                                        [kcal_tile, protein_tile, carbs_tile, fat_tile],
                                         spacing=8,
                                     ),
                                 ],

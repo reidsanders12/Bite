@@ -33,7 +33,7 @@ def build_snap_view(page: ft.Page, state) -> ft.View:
                 return
                 
             camera_manager.stop_camera()
-            status_txt.value = "Analyzing meal with Gemini AI..."
+            status_txt.value = "Analyzing meal with AI..."
             page.update()
             
             try:

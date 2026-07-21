@@ -51,6 +51,41 @@ class WorkoutEstimate(BaseModel):
     calories_burned: int = Field(description="Estimated total calories burned during the workout")
 
 
+class MealSuggestion(BaseModel):
+    meal_name: str = Field(description="A clean, appetizing name for the suggested meal")
+    rationale: str = Field(
+        description="One to two sentence explanation of why this meal fits the user's remaining macros and goals"
+    )
+    calories: int = Field(description="Estimated total calories for this meal")
+    protein: int = Field(description="Estimated protein in grams")
+    carbs: int = Field(description="Estimated carbohydrates in grams")
+    fat: int = Field(description="Estimated fat in grams")
+    ingredients: List[str] = Field(
+        description="Ingredients with rough quantities, e.g. '150g grilled chicken breast'"
+    )
+
+
+class WorkoutExercise(BaseModel):
+    name: str = Field(description="Name of the exercise or activity")
+    sets: int = Field(description="Number of sets (use 1 for a single continuous activity like a run)")
+    reps: str = Field(
+        description="Reps per set, or duration for timed/cardio exercises (e.g. '10', '30 sec', 'AMRAP')"
+    )
+    notes: Optional[str] = Field(
+        default=None, description="Optional coaching cue, tempo, or rest interval"
+    )
+
+
+class WorkoutPlan(BaseModel):
+    workout_name: str = Field(description="A clean, concise name for the overall workout session")
+    rationale: str = Field(
+        description="One to two sentence explanation of why this workout fits the user's stated goals and remaining energy"
+    )
+    estimated_duration_minutes: int = Field(description="Estimated total duration of the session in minutes")
+    estimated_calories_burned: int = Field(description="Estimated total calories burned during the session")
+    exercises: List[WorkoutExercise] = Field(description="Ordered list of exercises making up the session")
+
+
 class UserGoals(BaseModel):
     daily_calories: int = 2200
     daily_protein: int = 150

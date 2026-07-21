@@ -292,9 +292,19 @@ class AppState:
         """Returns this session's coach conversation (in-memory only)."""
         return self.chat_history
 
-    def add_chat_message(self, text: str, is_user: bool) -> None:
-        """Appends a message to this session's coach conversation (in-memory only)."""
-        self.chat_history.append({"text": text, "is_user": is_user})
+    def add_chat_message(self, text: str, is_user: bool, kind: str = None, data: dict = None) -> None:
+        """Appends a message to this session's coach conversation (in-memory only).
+
+        `kind`/`data` let a message carry a structured card payload (e.g. a meal
+        or workout suggestion) alongside its plain-text fallback, so revisiting
+        the coach screen can rebuild the same card instead of falling back to a
+        plain text bubble.
+        """
+        entry = {"text": text, "is_user": is_user}
+        if kind:
+            entry["kind"] = kind
+            entry["data"] = data
+        self.chat_history.append(entry)
 
     def refresh_circles(self) -> None:
         """Pulls every circle the signed-in user belongs to (circles screen)."""

@@ -1,12 +1,24 @@
 """
 Weight Tracking view: log your weight and see a trend chart over time.
-Always stored in kg; displayed in whichever unit the onboarding survey used.
+Always stored in kg; displayed in whichever unit is selected here (defaults
+to whatever the onboarding survey used, but can be switched on this screen).
 """
+import math
+
 import flet as ft
 
 from app import theme
 
 LB_PER_KG = 2.20462
+_AXIS_STEP = 0.5
+
+
+def _snap(value: float, round_up: bool) -> float:
+    """Rounds an axis bound out to the nearest _AXIS_STEP, so min/max never
+    land a fraction of a unit away from fl_chart's own auto-generated tick
+    marks (that near-duplicate spacing is what caused overlapping axis labels)."""
+    rounder = math.ceil if round_up else math.floor
+    return rounder(value / _AXIS_STEP) * _AXIS_STEP
 
 
 def build_weight_view(page: ft.Page, state) -> ft.View:
@@ -27,6 +39,35 @@ def build_weight_view(page: ft.Page, state) -> ft.View:
     def rerender() -> None:
         page.views[-1] = build_weight_view(page, state)
         page.update()
+
+    def set_unit_system(unit: str):
+        def handler(e):
+            if hasattr(state, "save_profile_data"):
+                state.save_profile_data({"unit_system": unit})
+            rerender()
+        return handler
+
+    def _unit_pill(label: str, unit_value: str, active: bool) -> ft.Control:
+        return ft.Container(
+            content=ft.Text(
+                label, size=13, weight="bold" if active else "w500",
+                color=theme.ACCENT_ON if active else theme.TEXT_MUTED,
+            ),
+            bgcolor=theme.ACCENT if active else None,
+            border_radius=theme.RADIUS_SM,
+            padding=ft.padding.symmetric(horizontal=16, vertical=8),
+            on_click=None if active else set_unit_system(unit_value),
+        )
+
+    unit_toggle = ft.Container(
+        content=ft.Row(
+            [_unit_pill("kg", "metric", not is_imperial), _unit_pill("lb", "imperial", is_imperial)],
+            spacing=4,
+        ),
+        bgcolor=theme.BG_SURFACE_ALT,
+        border_radius=theme.RADIUS_SM,
+        padding=4,
+    )
 
     weight_field = ft.TextField(
         label=f"Today's weight ({unit_label})",
@@ -66,9 +107,20 @@ def build_weight_view(page: ft.Page, state) -> ft.View:
         display_weights = [to_display(
             row.get("weight_kg", 0) if isinstance(row, dict) else getattr(row, "weight_kg", 0)
         ) for row in history]
-        points = [ft.LineChartDataPoint(i, w) for i, w in enumerate(display_weights)]
+        points = [
+            ft.LineChartDataPoint(i, w, tooltip=f"{w:.2f} {unit_label}")
+            for i, w in enumerate(display_weights)
+        ]
         min_w, max_w = min(display_weights), max(display_weights)
-        padding = max(1.0, (max_w - min_w) * 0.15)
+        # Generous, fixed headroom (not just a % of the span) so the tooltip
+        # over the highest point always has room above it instead of
+        # overlapping the axis labels in that corner. Bounds are then snapped
+        # to round numbers so they never land a fraction of a unit away from
+        # fl_chart's own auto tick marks -- that's what produced the
+        # overlapping "85.2"/"85" labels before.
+        padding = max(1.5, (max_w - min_w) * 0.25)
+        min_y = _snap(min_w - padding, round_up=False)
+        max_y = _snap(max_w + padding, round_up=True)
 
         chart_section = ft.Container(
             content=ft.LineChart(
@@ -86,13 +138,15 @@ def build_weight_view(page: ft.Page, state) -> ft.View:
                         ),
                     ),
                 ],
-                min_y=min_w - padding,
-                max_y=max_w + padding,
+                min_y=min_y,
+                max_y=max_y,
                 min_x=0,
                 max_x=max(1, len(display_weights) - 1),
-                left_axis=ft.ChartAxis(labels_size=40),
+                left_axis=ft.ChartAxis(labels_size=54),
                 bottom_axis=ft.ChartAxis(show_labels=False),
                 tooltip_bgcolor=theme.BG_SURFACE_ALT,
+                tooltip_fit_inside_horizontally=True,
+                tooltip_fit_inside_vertically=True,
                 interactive=True,
                 expand=True,
             ),
@@ -111,7 +165,7 @@ def build_weight_view(page: ft.Page, state) -> ft.View:
         delta = to_display(last_kg) - to_display(first_kg)
         arrow = "▲" if delta > 0 else ("▼" if delta < 0 else "―")
         trend_txt = ft.Text(
-            f"{arrow} {abs(delta):.1f} {unit_label} over {len(history)} entries",
+            f"{arrow} {abs(delta):.2f} {unit_label} over {len(history)} entries",
             size=13, color=theme.TEXT_MUTED,
         )
 
@@ -131,7 +185,7 @@ def build_weight_view(page: ft.Page, state) -> ft.View:
                 ft.Container(
                     content=ft.Row(
                         [
-                            ft.Text(f"{to_display(weight_kg):.1f} {unit_label}", size=14, weight="w600", color=theme.TEXT_PRIMARY, expand=True),
+                            ft.Text(f"{to_display(weight_kg):.2f} {unit_label}", size=14, weight="w600", color=theme.TEXT_PRIMARY, expand=True),
                             ft.Text(date_str, size=12, color=theme.TEXT_MUTED),
                             ft.IconButton(
                                 icon=ft.Icons.DELETE_OUTLINE, icon_color=theme.ERROR, icon_size=18,
@@ -155,6 +209,11 @@ def build_weight_view(page: ft.Page, state) -> ft.View:
             ft.Container(
                 content=ft.Column(
                     [
+                        ft.Row(
+                            [ft.Text("Units", size=12, color=theme.TEXT_MUTED), unit_toggle],
+                            spacing=10,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
                         ft.Row([weight_field, theme.primary_button("Log", icon=ft.Icons.ADD, on_click=save_weight)], spacing=10),
                         status_txt,
                         chart_section,
