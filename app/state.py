@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from app.config import ADMIN_EMAIL
 from app.database import Database
-from app.models import Circle, UserGoals
+from app.models import Circle, LogStreak, UserGoals
 
 class AppState:
     def __init__(self):
@@ -24,6 +24,7 @@ class AppState:
         # Core tracking metric data caches
         self.daily_logs: list = []       # today only -- home dashboard + coach
         self.history_logs: list = []     # full history -- history screen
+        self.log_streak: LogStreak = LogStreak()  # consecutive-day food-logging streak -- home dashboard
         self.user_goals: UserGoals = UserGoals()
         self.current_user_name: str = ""
         self.current_user_email: str = ""
@@ -53,6 +54,18 @@ class AppState:
             self.history_logs = self.db.get_all_logs()
         except Exception as err:
             print(f"[STATE ERROR] History sync failed: {str(err)}")
+
+    def refresh_log_streak(self) -> None:
+        """Pulls the caller's current consecutive-day food-logging streak (home dashboard)."""
+        try:
+            self.log_streak = self.db.get_log_streak()
+        except Exception as err:
+            print(f"[STATE ERROR] Streak sync failed: {str(err)}")
+            self.log_streak = LogStreak()
+
+    def get_log_streak(self) -> LogStreak:
+        """Returns the cached current food-logging streak."""
+        return self.log_streak
 
     def refresh_goals(self) -> None:
         """Pulls the signed-in user's saved macro targets, falling back to defaults."""
@@ -97,6 +110,7 @@ class AppState:
         """Saves a new entry, scoped to the active user, to the cloud database."""
         self.db.log_food(name, cal, pro, carb, fat)
         self.refresh_logs()
+        self.refresh_log_streak()
         self._auto_checkin_circles("calories")
 
     def refresh_workouts(self) -> None:
@@ -204,7 +218,14 @@ class AppState:
         return self.sponsor_requests
 
     def approve_sponsor(self, sponsor_id: int) -> tuple[bool, str]:
-        """Approves and activates a pending sponsor request."""
+        """Approves and activates a pending sponsor request.
+
+        `is_admin()` is checked here too, not just relied on to hide the nav
+        link -- the sponsors_update_owner RLS policy is the real enforcement,
+        this is a redundant app-layer copy of the same rule (defense-in-depth,
+        matching database.py's circle ownership re-checks)."""
+        if not self.is_admin():
+            return False, "Only the admin account can review sponsors."
         success, err = self.db.update_sponsor_status(sponsor_id, "approved", True)
         if success:
             self.refresh_sponsor_requests()
@@ -212,6 +233,8 @@ class AppState:
 
     def reject_sponsor(self, sponsor_id: int) -> tuple[bool, str]:
         """Rejects a sponsor request (kept for the record, never shown)."""
+        if not self.is_admin():
+            return False, "Only the admin account can review sponsors."
         success, err = self.db.update_sponsor_status(sponsor_id, "rejected", False)
         if success:
             self.refresh_sponsor_requests()
@@ -219,6 +242,8 @@ class AppState:
 
     def set_sponsor_active(self, sponsor_id: int, active: bool) -> tuple[bool, str]:
         """Toggles an already-approved sponsor on/off without re-reviewing it."""
+        if not self.is_admin():
+            return False, "Only the admin account can review sponsors."
         success, err = self.db.update_sponsor_status(sponsor_id, "approved", active)
         if success:
             self.refresh_sponsor_requests()

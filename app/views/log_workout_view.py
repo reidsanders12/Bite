@@ -69,7 +69,9 @@ def build_log_workout_view(page: ft.Page, state) -> ft.View:
         status_area.content = loading_view("Estimating calories burned...")
         page.update()
         try:
-            estimate = await ai_engine.analyze_workout(text, weight_kg=_saved_weight_kg(state))
+            estimate = await ai_engine.analyze_workout(
+                text, access_token=state.db.get_access_token(), weight_kg=_saved_weight_kg(state)
+            )
         except ai_engine.AIEngineError as exc:
             status_area.content = error_banner(str(exc))
             estimate_button.disabled = False

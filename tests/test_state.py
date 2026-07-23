@@ -1,4 +1,4 @@
-from app.models import Circle
+from app.models import Circle, LogStreak
 
 
 def _calorie_circle(goal_value=1500, circle_id=1):
@@ -58,6 +58,25 @@ def test_log_food_does_not_check_in_calorie_circle_below_target(state):
     state.log_food("Snack", 500, 5, 10, 2)
 
     state.db.check_in.assert_not_called()
+
+
+def test_log_food_refreshes_log_streak(state):
+    state.db.get_logs_for_date.return_value = []
+    state.db.get_my_circles.return_value = []
+    state.db.get_log_streak.return_value = LogStreak(current_streak=3, logged_today=True)
+
+    state.log_food("Snack", 100, 5, 10, 2)
+
+    state.db.get_log_streak.assert_called_once()
+    assert state.get_log_streak() == LogStreak(current_streak=3, logged_today=True)
+
+
+def test_refresh_log_streak_falls_back_to_zero_on_db_error(state):
+    state.db.get_log_streak.side_effect = Exception("boom")
+
+    state.refresh_log_streak()
+
+    assert state.get_log_streak() == LogStreak()
 
 
 def test_log_food_ignores_workout_circles(state):

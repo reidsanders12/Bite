@@ -300,6 +300,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
                 state.get_chat_history(),
                 totals,
                 goals,
+                access_token=state.db.get_access_token(),
                 workout_goals=goals_field.value or "",
                 workouts_summary=workouts_summary,
                 weight_trend_summary=weight_trend_summary,
@@ -329,7 +330,9 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
         page.update()
 
         try:
-            suggestion = await suggest_meal(totals, goals, workout_goals=goals_field.value or "")
+            suggestion = await suggest_meal(
+                totals, goals, access_token=state.db.get_access_token(), workout_goals=goals_field.value or ""
+            )
             chat_list.controls.remove(loader)
             chat_list.controls.append(render_meal_card(suggestion))
             state.add_chat_message(
@@ -362,6 +365,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
             plan = await suggest_workout(
                 totals,
                 goals,
+                access_token=state.db.get_access_token(),
                 workout_goals=goals_field.value or "",
                 workouts_summary=workouts_summary,
                 weight_trend_summary=weight_trend_summary,

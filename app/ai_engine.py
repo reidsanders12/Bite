@@ -1,34 +1,46 @@
 """
 Client-side AI engine.
 
-Every call in this file runs the Gemini request directly from the user's own
-device using their own free-tier API key (read from the GEMINI_API_KEY
-environment variable, loaded instantly from app.config). There is no proxy server
-in between -- this is the piece that makes "$0 infrastructure at scale"
-possible: Google, not us, pays for (and rate-limits) the inference.
+Every call in this file goes through the `gemini-proxy` Supabase Edge
+Function (see supabase/functions/gemini-proxy/index.ts), not straight to
+Gemini. Previously this called the google-genai SDK directly from the
+user's device using a GEMINI_API_KEY embedded in the app's own .env --
+which meant that key shipped inside every compiled build and anyone could
+pull it back out and spend your quota outside the app entirely. The proxy
+fixes that: the app builds the exact same request it always did (system
+instruction, contents, generation config, response schema) and POSTs it to
+the Edge Function instead, which holds the real key server-side, checks the
+caller has a live Supabase session, enforces a per-user daily cap, and
+forwards the request to Gemini on the app's behalf.
 
-We NEVER accept free-form conversational text back from the food analysis models. 
-Requests set response_mime_type="application/json" and pass the MacroBreakdown 
-Pydantic model directly as response_schema. The AI Coach utilizes a standard 
-text generation stream wrapped with local context injection.
+We NEVER accept free-form conversational text back from the food analysis
+models. Requests set response_mime_type="application/json" and pass a
+hand-converted Gemini Schema (see `_schema_for`) built from the MacroBreakdown
+Pydantic model, so downstream parsing can skip writing any JSON-parsing /
+regex defensive code. The AI Coach uses a standard text generation call with
+local context injection and no schema (free-form reply).
 """
 
-import os
-import json
 import asyncio
-from typing import List
-from google import genai
-from google.genai import types, errors
+import base64
+from typing import Optional, Type
 
+import httpx
+from pydantic import BaseModel
+
+from app.config import SUPABASE_ANON_KEY, SUPABASE_URL
 from app.models import MacroBreakdown, UserGoals, WorkoutEstimate, MealSuggestion, WorkoutPlan
 
 MODEL_NAME = "gemini-2.5-flash"
 
+_PROXY_URL = f"{SUPABASE_URL}/functions/v1/gemini-proxy"
 _MAX_RETRIES = 3
 _RETRY_BASE_DELAY_SECONDS = 2
+_REQUEST_TIMEOUT_SECONDS = 30.0
+
 
 class AIEngineError(Exception):
-    """Raised on structural validation failures or API errors."""
+    """Raised on structural validation failures, proxy errors, or a missing session."""
 
 
 _SYSTEM_PROMPT = (
@@ -106,143 +118,224 @@ _WORKOUT_PLAN_INSTRUCTION = (
 )
 
 
-def _get_client() -> genai.Client:
-    """Initializes the standard client with the configuration key."""
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        raise AIEngineError("AI API key missing. Please verify your app/config.py settings.")
-    return genai.Client(api_key=api_key)
+# ------------------------------------------------------- SCHEMA CONVERSION
+
+def _schema_for(model_cls: Type[BaseModel]) -> dict:
+    """Converts a Pydantic model into Gemini's Schema format (a restricted,
+    OpenAPI-flavored subset of JSON Schema: uppercase `type` enum, no
+    `$ref`/`$defs` -- everything inlined, Optional[X] expressed as
+    `nullable: true` instead of `anyOf`).
+
+    Only supports the shapes actually used by this app's models: plain
+    str/int/bool/float fields, `Optional[str]`-style nullable fields,
+    `List[str]`, and `List[SubModel]` one level deep. It does not attempt to
+    handle enums, unions beyond Optional, or deeper nesting -- extend this
+    if a future model needs more.
+    """
+    raw = model_cls.model_json_schema()
+    defs = raw.get("$defs", {})
+    _TYPE_MAP = {
+        "object": "OBJECT", "string": "STRING", "integer": "INTEGER",
+        "number": "NUMBER", "boolean": "BOOLEAN", "array": "ARRAY",
+    }
+
+    def convert(node: dict) -> dict:
+        if "$ref" in node:
+            ref_name = node["$ref"].split("/")[-1]
+            return convert(defs[ref_name])
+
+        if "anyOf" in node:
+            non_null = [n for n in node["anyOf"] if n.get("type") != "null"]
+            converted = convert(non_null[0]) if non_null else {"type": "STRING"}
+            converted["nullable"] = True
+            return converted
+
+        json_type = node.get("type", "object")
+        out = {"type": _TYPE_MAP.get(json_type, "STRING")}
+        if "description" in node:
+            out["description"] = node["description"]
+
+        if json_type == "object":
+            props = node.get("properties", {})
+            out["properties"] = {k: convert(v) for k, v in props.items()}
+            if node.get("required"):
+                out["required"] = node["required"]
+        elif json_type == "array":
+            out["items"] = convert(node.get("items", {}))
+
+        return out
+
+    return convert(raw)
 
 
-def _config() -> types.GenerateContentConfig:
-    """Shared rigid configuration template for the structured food analysis workflows."""
-    return types.GenerateContentConfig(
-        system_instruction=_SYSTEM_PROMPT,
-        temperature=0.2,
-        response_mime_type="application/json",
-        response_schema=MacroBreakdown,
-    )
-
-
-async def _generate_with_retry(client: genai.Client, **kwargs) -> types.GenerateContentResponse:
-    """Calls generate_content, retrying on transient 503 (model overloaded) errors."""
-    for attempt in range(_MAX_RETRIES):
-        try:
-            return await client.aio.models.generate_content(**kwargs)
-        except errors.ServerError:
-            if attempt == _MAX_RETRIES - 1:
-                raise
-            await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * (2 ** attempt))
-
-
-def _extract(response: types.GenerateContentResponse) -> MacroBreakdown:
-    """Safely un-wraps and validates JSON structures returning an absolute data model."""
-    txt = response.text
-    if not txt:
+def _extract(model_cls: Type[BaseModel], text: str):
+    """Safely un-wraps and validates a JSON response body into a Pydantic model."""
+    if not text:
         raise AIEngineError("The AI didn't return a response. Please try again.")
     try:
-        return MacroBreakdown.model_validate_json(txt)
+        return model_cls.model_validate_json(text)
     except Exception as exc:
         raise AIEngineError(
-            f"The AI response couldn't be parsed as a macro breakdown: {exc}"
+            f"The AI response couldn't be parsed as {model_cls.__name__}: {exc}"
         ) from exc
+
+
+# --------------------------------------------------------------- PROXY CALL
+
+async def _call_gemini(
+    access_token: Optional[str],
+    contents: list,
+    system_instruction: str,
+    temperature: float,
+    response_mime_type: Optional[str] = None,
+    response_schema_cls: Optional[Type[BaseModel]] = None,
+) -> str:
+    """POSTs a request to the gemini-proxy Edge Function and returns the
+    generated text. Retries on 5xx (proxy or upstream Gemini transient
+    failures); raises AIEngineError on anything else (missing session,
+    rate limit, bad request)."""
+    if not access_token:
+        raise AIEngineError("You're not signed in -- please sign in again.")
+
+    payload: dict = {
+        "model": MODEL_NAME,
+        "contents": contents,
+        "system_instruction": system_instruction,
+        "temperature": temperature,
+    }
+    if response_mime_type:
+        payload["response_mime_type"] = response_mime_type
+    if response_schema_cls:
+        payload["response_schema"] = _schema_for(response_schema_cls)
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "apikey": SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+    }
+
+    async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+        resp = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                resp = await client.post(_PROXY_URL, json=payload, headers=headers)
+            except httpx.HTTPError as exc:
+                if attempt == _MAX_RETRIES - 1:
+                    raise AIEngineError(f"Couldn't reach the AI service: {exc}") from exc
+                await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * (2 ** attempt))
+                continue
+
+            if resp.status_code == 429:
+                detail = _safe_error_detail(resp)
+                raise AIEngineError(detail or "Daily AI request limit reached. Try again tomorrow.")
+            if resp.status_code == 401:
+                raise AIEngineError("Your session expired -- please sign in again.")
+            if resp.status_code >= 500 and attempt < _MAX_RETRIES - 1:
+                await asyncio.sleep(_RETRY_BASE_DELAY_SECONDS * (2 ** attempt))
+                continue
+            if resp.status_code >= 400:
+                detail = _safe_error_detail(resp)
+                raise AIEngineError(detail or f"AI request failed ({resp.status_code}).")
+            break
+
+    data = resp.json()
+    try:
+        return data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        raise AIEngineError("The AI didn't return a usable response. Please try again.")
+
+
+def _safe_error_detail(resp: httpx.Response) -> Optional[str]:
+    try:
+        return resp.json().get("error")
+    except Exception:
+        return None
 
 
 # ------------------------------------------------------------- CORE ANALYSIS LOGS
 
-async def analyze_image(photo_bytes: bytes) -> MacroBreakdown:
-    """Send raw photo bytes to Gemini asynchronously for strict Pydantic parsing."""
-    client = _get_client()
+async def analyze_image(photo_bytes: bytes, access_token: str) -> MacroBreakdown:
+    """Send raw photo bytes to Gemini (via the proxy) for strict Pydantic parsing."""
+    b64 = base64.b64encode(photo_bytes).decode("ascii")
+    contents = [{
+        "role": "user",
+        "parts": [
+            {"inlineData": {"mimeType": "image/jpeg", "data": b64}},
+            {"text": _IMAGE_INSTRUCTION},
+        ],
+    }]
     try:
-        # Construct the official binary Part object required by the new SDK
-        image_part = types.Part.from_bytes(
-            data=photo_bytes,
-            mime_type="image/jpeg"
+        text = await _call_gemini(
+            access_token, contents, _SYSTEM_PROMPT, temperature=0.2,
+            response_mime_type="application/json", response_schema_cls=MacroBreakdown,
         )
-        
-        # Use your native async pipeline wrapper (.aio), retrying transient 503s
-        response = await _generate_with_retry(
-            client,
-            model=MODEL_NAME,
-            contents=[image_part, _IMAGE_INSTRUCTION],
-            config=_config() # Uses your rigorous predefined Pydantic schema rule
-        )
+    except AIEngineError:
+        raise
     except Exception as exc:
         raise AIEngineError(f"AI photo analysis failed: {exc}") from exc
-        
-    return _extract(response)
+
+    return _extract(MacroBreakdown, text)
 
 
-async def analyze_audio(audio_bytes: bytes, mime_type: str = "audio/wav") -> MacroBreakdown:
-    """Send a raw voice-log recording to Gemini for structured Pydantic parsing.
+async def analyze_audio(audio_bytes: bytes, access_token: str, mime_type: str = "audio/wav") -> MacroBreakdown:
+    """Send a raw voice-log recording to Gemini (via the proxy) for structured parsing.
 
     Gemini transcribes and interprets the speech in a single multimodal call
     -- same "AI does the heavy lifting" pattern as analyze_image, just with
     an audio Part instead of an image Part.
     """
-    client = _get_client()
+    b64 = base64.b64encode(audio_bytes).decode("ascii")
+    contents = [{
+        "role": "user",
+        "parts": [
+            {"inlineData": {"mimeType": mime_type, "data": b64}},
+            {"text": _AUDIO_INSTRUCTION},
+        ],
+    }]
     try:
-        audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
-        response = await _generate_with_retry(
-            client,
-            model=MODEL_NAME,
-            contents=[audio_part, _AUDIO_INSTRUCTION],
-            config=_config(),
+        text = await _call_gemini(
+            access_token, contents, _SYSTEM_PROMPT, temperature=0.2,
+            response_mime_type="application/json", response_schema_cls=MacroBreakdown,
         )
+    except AIEngineError:
+        raise
     except Exception as exc:
         raise AIEngineError(f"AI audio analysis failed: {exc}") from exc
-    return _extract(response)
+    return _extract(MacroBreakdown, text)
 
 
-async def analyze_text(text: str) -> MacroBreakdown:
-    """Send a natural-language food description to Gemini (text-only, cheap) for parsing."""
-    client = _get_client()
+async def analyze_text(text: str, access_token: str) -> MacroBreakdown:
+    """Send a natural-language food description to Gemini (via the proxy, text-only, cheap) for parsing."""
     prompt = _TEXT_INSTRUCTION_TEMPLATE.format(text=text)
+    contents = [{"role": "user", "parts": [{"text": prompt}]}]
     try:
-        response = await _generate_with_retry(
-            client,
-            model=MODEL_NAME,
-            contents=prompt,
-            config=_config(),
+        response_text = await _call_gemini(
+            access_token, contents, _SYSTEM_PROMPT, temperature=0.2,
+            response_mime_type="application/json", response_schema_cls=MacroBreakdown,
         )
     except AIEngineError:
         raise
     except Exception as exc:
         raise AIEngineError(f"AI text analysis failed: {exc}") from exc
-    return _extract(response)
+    return _extract(MacroBreakdown, response_text)
 
 
-async def analyze_workout(text: str, weight_kg: float = None) -> WorkoutEstimate:
-    """Send a natural-language workout description to Gemini for a calories-burned estimate."""
-    client = _get_client()
+async def analyze_workout(text: str, access_token: str, weight_kg: float = None) -> WorkoutEstimate:
+    """Send a natural-language workout description to Gemini (via the proxy) for a calories-burned estimate."""
     weight_clause = f"The person weighs approximately {weight_kg:.0f}kg. " if weight_kg else ""
     prompt = _WORKOUT_INSTRUCTION_TEMPLATE.format(weight_clause=weight_clause, text=text)
+    contents = [{"role": "user", "parts": [{"text": prompt}]}]
     try:
-        response = await _generate_with_retry(
-            client,
-            model=MODEL_NAME,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_WORKOUT_SYSTEM_PROMPT,
-                temperature=0.2,
-                response_mime_type="application/json",
-                response_schema=WorkoutEstimate,
-            ),
+        response_text = await _call_gemini(
+            access_token, contents, _WORKOUT_SYSTEM_PROMPT, temperature=0.2,
+            response_mime_type="application/json", response_schema_cls=WorkoutEstimate,
         )
     except AIEngineError:
         raise
     except Exception as exc:
         raise AIEngineError(f"AI workout analysis failed: {exc}") from exc
 
-    txt = response.text
-    if not txt:
-        raise AIEngineError("The AI didn't return a response. Please try again.")
-    try:
-        return WorkoutEstimate.model_validate_json(txt)
-    except Exception as exc:
-        raise AIEngineError(
-            f"The AI response couldn't be parsed as a workout estimate: {exc}"
-        ) from exc
+    return _extract(WorkoutEstimate, response_text)
 
 
 # ----------------------------------------------------------------- AI COACH SYSTEM
@@ -279,84 +372,57 @@ def _build_coach_context(
 async def suggest_meal(
     totals: dict,
     goals: UserGoals,
+    access_token: str,
     workout_goals: str = "",
 ) -> MealSuggestion:
     """One-shot structured meal suggestion for the coach screen's "Suggest a meal"
-    button. Unlike chat_with_coach, this forces a Pydantic response_schema so the
+    button. Unlike chat_with_coach, this forces a response_schema so the
     UI always gets a clean, consistently-shaped card instead of free-form prose.
     """
-    client = _get_client()
     context = _build_coach_context(totals, goals, workout_goals=workout_goals)
     prompt = f"{context}{_MEAL_SUGGESTION_INSTRUCTION}"
+    contents = [{"role": "user", "parts": [{"text": prompt}]}]
     try:
-        response = await _generate_with_retry(
-            client,
-            model=MODEL_NAME,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_COACH_SYSTEM_PROMPT,
-                temperature=0.4,
-                response_mime_type="application/json",
-                response_schema=MealSuggestion,
-            ),
+        response_text = await _call_gemini(
+            access_token, contents, _COACH_SYSTEM_PROMPT, temperature=0.4,
+            response_mime_type="application/json", response_schema_cls=MealSuggestion,
         )
+    except AIEngineError:
+        raise
     except Exception as exc:
         raise AIEngineError(f"AI meal suggestion failed: {exc}") from exc
 
-    txt = response.text
-    if not txt:
-        raise AIEngineError("The AI didn't return a response. Please try again.")
-    try:
-        return MealSuggestion.model_validate_json(txt)
-    except Exception as exc:
-        raise AIEngineError(
-            f"The AI response couldn't be parsed as a meal suggestion: {exc}"
-        ) from exc
+    return _extract(MealSuggestion, response_text)
 
 
 async def suggest_workout(
     totals: dict,
     goals: UserGoals,
+    access_token: str,
     workout_goals: str = "",
     workouts_summary: str = "",
     weight_trend_summary: str = "",
 ) -> WorkoutPlan:
     """One-shot structured workout plan for the coach screen's "Suggest a workout"
-    button. Forces a Pydantic response_schema for the same reason as suggest_meal.
+    button. Forces a response_schema for the same reason as suggest_meal.
     """
-    client = _get_client()
     context = _build_coach_context(
-        totals,
-        goals,
-        workout_goals=workout_goals,
-        workouts_summary=workouts_summary,
-        weight_trend_summary=weight_trend_summary,
+        totals, goals, workout_goals=workout_goals,
+        workouts_summary=workouts_summary, weight_trend_summary=weight_trend_summary,
     )
     prompt = f"{context}{_WORKOUT_PLAN_INSTRUCTION}"
+    contents = [{"role": "user", "parts": [{"text": prompt}]}]
     try:
-        response = await _generate_with_retry(
-            client,
-            model=MODEL_NAME,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=_COACH_SYSTEM_PROMPT,
-                temperature=0.4,
-                response_mime_type="application/json",
-                response_schema=WorkoutPlan,
-            ),
+        response_text = await _call_gemini(
+            access_token, contents, _COACH_SYSTEM_PROMPT, temperature=0.4,
+            response_mime_type="application/json", response_schema_cls=WorkoutPlan,
         )
+    except AIEngineError:
+        raise
     except Exception as exc:
         raise AIEngineError(f"AI workout plan request failed: {exc}") from exc
 
-    txt = response.text
-    if not txt:
-        raise AIEngineError("The AI didn't return a response. Please try again.")
-    try:
-        return WorkoutPlan.model_validate_json(txt)
-    except Exception as exc:
-        raise AIEngineError(
-            f"The AI response couldn't be parsed as a workout plan: {exc}"
-        ) from exc
+    return _extract(WorkoutPlan, response_text)
 
 
 async def chat_with_coach(
@@ -364,43 +430,37 @@ async def chat_with_coach(
     history: list,
     totals: dict,
     goals: UserGoals,
+    access_token: str,
     workout_goals: str = "",
     workouts_summary: str = "",
     weight_trend_summary: str = "",
 ) -> str:
-    """Runs a free conversational fitness consultation directly on the client device.
+    """Runs a free conversational fitness consultation via the proxy.
 
     Injects local database macro state (including how much of today's budget
     is left, adjusted for any exercise calories logged today), the user's
     stated fitness goals, today's logged workouts, and their weight trend --
     so the coach reasons about the whole picture, not just food macros.
     """
-    client = _get_client()
-
-    # 1. Synthesize current fitness context from cloud database metrics
     context_prefix = (
         _build_coach_context(totals, goals, workout_goals, workouts_summary, weight_trend_summary)
         + "Answer the user's question with these metrics explicitly in mind."
     )
 
-    # 2. Build explicit conversation history for Gemini API
     contents = []
     for turn in history[-6:]:  # Rolling memory window to keep context tight and fast
         role = "user" if turn["is_user"] else "model"
-        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=turn["text"])]))
-        
-    # Append the newest message with the injected local context header
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=f"{context_prefix}\n\nUser: {user_message}")]))
-    
+        contents.append({"role": role, "parts": [{"text": turn["text"]}]})
+
+    contents.append({
+        "role": "user",
+        "parts": [{"text": f"{context_prefix}\n\nUser: {user_message}"}],
+    })
+
     try:
-        response = await client.aio.models.generate_content(
-            model=MODEL_NAME,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=_COACH_SYSTEM_PROMPT,
-                temperature=0.7
-            )
-        )
-        return response.text if response.text else "Coach couldn't process that response."
+        text = await _call_gemini(access_token, contents, _COACH_SYSTEM_PROMPT, temperature=0.7)
+        return text if text else "Coach couldn't process that response."
+    except AIEngineError:
+        raise
     except Exception as exc:
         raise AIEngineError(f"Trainer chat failed: {exc}") from exc

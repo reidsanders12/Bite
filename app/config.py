@@ -1,23 +1,17 @@
 import os
 from dotenv import load_dotenv
-from google import genai
 
 root_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 env_path = os.path.join(root_dir, ".env")
 load_dotenv(env_path)
 
-ai_key = os.getenv("GEMINI_API_KEY")
+# GEMINI_API_KEY intentionally does NOT live here (or anywhere in the app or
+# its .env) anymore. AI calls go through the gemini-proxy Supabase Edge
+# Function (see app/ai_engine.py + supabase/functions/gemini-proxy), which
+# holds that key server-side -- a shipped client build should never contain
+# an API key that costs real money per call, since anyone can extract it
+# from the compiled app.
 usda_key = os.getenv("USDA_API_KEY")
-
-if not ai_key:
-    raise ValueError(
-        f"[Config Engine] CRITICAL ERROR: GEMINI_API_KEY is still not set!\n"
-        f"Please verify that your file contains a line that looks exactly like:\n"
-        f"GEMINI_API_KEY=your_actual_key_here\n"
-        f"Current path checked: {env_path}"
-    )
-
-client = genai.Client(api_key=ai_key)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")

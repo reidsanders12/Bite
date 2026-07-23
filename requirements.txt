@@ -1,7 +1,13 @@
 flet==0.28.3
 python-dotenv==1.2.1
-google-genai==1.47.0
 pydantic==2.13.4
 httpx==0.28.1
-supabase
-opencv-python
+supabase==2.31.0
+opencv-python==5.0.0.93
+
+# Pinned explicitly (not just left to pip's transitive resolution): flet==0.28.3's
+# socket layer throws "Receive loop error: 'text'" against any non-localhost
+# client (e.g. `flet run --ios`/`--android`, or `--web` accessed from another
+# device) when `websockets` resolves to 14.x or newer. 13.0.1 is the newest
+# version confirmed to still work. See flet-dev/flet issues #4884 and #5603.
+websockets==13.0.1

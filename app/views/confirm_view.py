@@ -143,7 +143,8 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
             page.go("/")
             
         except Exception as err:
-            status_msg.value = f"Couldn't save: {str(err)}"
+            print(f"[UI Error] Couldn't save logged entry: {err}")
+            status_msg.value = "Couldn't save -- please try again."
             page.update()
 
     return ft.View(

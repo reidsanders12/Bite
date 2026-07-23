@@ -66,7 +66,20 @@ def main(page: ft.Page):
 
                 # Dynamically look up and rebuild the requested view layout
                 builder = VIEW_BUILDERS.get(page.route)
-                
+
+                # /sponsor_requests is only ever surfaced via a nav link
+                # that's hidden for non-admins, but the route itself must
+                # also refuse to render for anyone who navigates there
+                # directly (e.g. by URL on web) -- the sponsors_select_owner
+                # RLS policy would just hand back an empty list either way,
+                # but gating the route too means that's belt-and-suspenders
+                # rather than the only thing standing between a random user
+                # and the admin screen.
+                if page.route == "/sponsor_requests" and not (
+                    hasattr(state, "is_admin") and state.is_admin()
+                ):
+                    builder = build_home_view
+
                 if builder:
                     page.views.append(builder(page, state))
                 else:
@@ -84,7 +97,11 @@ def main(page: ft.Page):
                             ft.Container(
                                 content=ft.Column([
                                     ft.Text("Failed to build view component safely.", color=ft.Colors.ERROR, weight="bold"),
-                                    ft.Text(f"Error Details: {str(err)}", size=12),
+                                    # Generic message only -- the real exception (already
+                                    # printed to the console above via traceback.print_exc())
+                                    # can include internal details we don't want to hand to
+                                    # whoever's looking at this screen.
+                                    ft.Text("Something went wrong loading this screen. Please try again.", size=12),
                                     ft.ElevatedButton("Force Reset to Auth Screen", on_click=lambda _: page.go("/auth"))
                                 ]),
                                 padding=20

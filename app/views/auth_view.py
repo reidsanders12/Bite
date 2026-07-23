@@ -65,7 +65,10 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
 
     async def handle_login(e):
         email = email_field.value.strip()
-        password = password_field.value.strip()
+        # Not .strip()'d: a password field's leading/trailing whitespace may
+        # be intentional, and silently discarding it narrows the effective
+        # password space without the user knowing.
+        password = password_field.value
 
         if not email or not password:
             status_msg.value = "Please enter your email and password."
@@ -87,14 +90,17 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                 raise Exception("We couldn't sign you in. Please try again.")
 
         except Exception as err:
-            status_msg.value = f"Sign in failed: {str(err)}"
+            # Generic message to the user -- the real exception (which can
+            # include Supabase/GoTrue internals) goes to the console only.
+            print(f"[Auth Error] Sign in failed: {err}")
+            status_msg.value = "Sign in failed. Please check your email and password and try again."
             status_msg.color = theme.ERROR
             page.update()
 
     async def handle_register(e):
         name = name_field.value.strip()
         email = email_field.value.strip()
-        password = password_field.value.strip()
+        password = password_field.value  # not .strip()'d -- see handle_login
 
         if not name:
             status_msg.value = "Please tell us what to call you."
@@ -102,8 +108,8 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
             page.update()
             return
 
-        if not email or len(password) < 6:
-            status_msg.value = "Please enter a valid email and a password with at least 6 characters."
+        if not email or len(password) < 10:
+            status_msg.value = "Please enter a valid email and a password with at least 10 characters."
             status_msg.color = theme.ERROR
             page.update()
             return
@@ -130,7 +136,8 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                 page.update()
 
         except Exception as err:
-            status_msg.value = f"Registration failed: {str(err)}"
+            print(f"[Auth Error] Registration failed: {err}")
+            status_msg.value = "Registration failed. Please double-check your details and try again."
             status_msg.color = theme.ERROR
             page.update()
 

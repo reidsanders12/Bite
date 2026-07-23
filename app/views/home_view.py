@@ -11,6 +11,8 @@ from app.state import AppState
 def build_home_view(page: ft.Page, state: AppState) -> ft.View:
     if hasattr(state, "refresh_logs"):
         state.refresh_logs()
+    if hasattr(state, "refresh_log_streak"):
+        state.refresh_log_streak()
     if hasattr(state, "refresh_circles"):
         state.refresh_circles()
     if hasattr(state, "refresh_workouts"):
@@ -26,6 +28,9 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         page.update()
 
     daily_logs = state.get_daily_logs() if hasattr(state, "get_daily_logs") else getattr(state, "logs", [])
+    log_streak = state.get_log_streak() if hasattr(state, "get_log_streak") else None
+    streak_days = getattr(log_streak, "current_streak", 0)
+    streak_logged_today = getattr(log_streak, "logged_today", False)
     goals = state.get_goals() if hasattr(state, "get_goals") else getattr(state, "goals", None)
     circles = state.get_circles() if hasattr(state, "get_circles") else []
     daily_workouts = state.get_daily_workouts() if hasattr(state, "get_daily_workouts") else []
@@ -201,6 +206,34 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         border=ft.border.all(1, theme.BORDER), shadow=theme.CARD_SHADOW,
     )
 
+    # Streak Badge -- consecutive days with at least one food log. Counts
+    # through yesterday (not reset to zero) until today actually ends, so
+    # the "keep it alive" nudge only shows once there's something to lose.
+    if streak_days > 0:
+        streak_text = f"{streak_days} day{'s' if streak_days != 1 else ''} streak"
+        streak_hint = "" if streak_logged_today else " · log today to keep it"
+    else:
+        streak_text = "Log today to start a streak"
+        streak_hint = ""
+
+    streak_badge = ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(
+                    ft.Icons.LOCAL_FIRE_DEPARTMENT_ROUNDED,
+                    size=16,
+                    color=theme.ACCENT if streak_days > 0 else theme.TEXT_FAINT,
+                ),
+                ft.Text(streak_text, size=12, weight="w600", color=theme.TEXT_PRIMARY),
+                ft.Text(streak_hint, size=12, color=theme.TEXT_FAINT),
+            ],
+            spacing=6, tight=True,
+        ),
+        padding=ft.padding.symmetric(6, 12),
+        bgcolor=theme.BG_SURFACE_ALT,
+        border_radius=theme.RADIUS_LG,
+    )
+
     # Timeline Build List
     timeline_items = ft.Column(spacing=12)
     if not daily_logs:
@@ -329,7 +362,11 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
     sponsors = state.get_sponsors() if hasattr(state, "get_sponsors") else []
     if sponsors:
         sponsor = random.choice(sponsors)
-        website_url = sponsor.get("website_url")
+        raw_url = (sponsor.get("website_url") or "").strip()
+        # Only ever open http(s) links -- defense-in-depth against a
+        # malicious/mistaken javascript:, file:, or other unexpected scheme
+        # ending up in an approved sponsor row.
+        website_url = raw_url if raw_url.lower().startswith(("http://", "https://")) else None
         promo_card = ft.Container(
             content=ft.Row(
                 [
@@ -373,6 +410,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
             ),
             ft.Container(
                 content=ft.Column([
+                    ft.Row([streak_badge], alignment=ft.MainAxisAlignment.START),
                     progress_card,
                     ft.Divider(color="transparent", height=4),
                     logging_shortcuts,

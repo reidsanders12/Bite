@@ -37,8 +37,12 @@ def build_snap_view(page: ft.Page, state) -> ft.View:
             page.update()
             
             try:
-                # 2. Pass the raw bytes straight into the exact keyword parameter name required
-                macro_breakdown = await ai_engine.analyze_image(photo_bytes=photo_bytes)
+                # 2. Pass the raw bytes + the caller's session token (the proxy
+                # verifies this token instead of trusting an embedded API key)
+                access_token = state.db.get_access_token()
+                macro_breakdown = await ai_engine.analyze_image(
+                    photo_bytes=photo_bytes, access_token=access_token
+                )
                 
                 # 3. Stage the result model cleanly in global state and proceed
                 state.set_pending(macro_breakdown, source="snap")

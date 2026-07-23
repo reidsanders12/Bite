@@ -73,7 +73,9 @@ def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
         try:
             with open(path, "rb") as f:
                 audio_bytes = f.read()
-            breakdown = await ai_engine.analyze_audio(audio_bytes, mime_type="audio/wav")
+            breakdown = await ai_engine.analyze_audio(
+                audio_bytes, access_token=state.db.get_access_token(), mime_type="audio/wav"
+            )
         except ai_engine.AIEngineError as exc:
             status_area.content = error_banner(str(exc))
             submit_button.disabled = False
@@ -153,7 +155,7 @@ def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
         status_area.content = loading_view("Parsing your meal log...")
         page.update()
         try:
-            breakdown = await ai_engine.analyze_text(text)
+            breakdown = await ai_engine.analyze_text(text, access_token=state.db.get_access_token())
         except ai_engine.AIEngineError as exc:
             status_area.content = error_banner(str(exc))
             submit_button.disabled = False

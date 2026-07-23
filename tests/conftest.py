@@ -3,13 +3,14 @@ Shared test fixtures.
 
 Sets dummy credentials *before* any `app.*` module is imported, so tests
 never depend on (or accidentally read) a developer's real `.env` file or
-touch a real Gemini/Supabase endpoint. `load_dotenv()` in app/config.py
-never overrides variables already present in the environment, so these
-values win even if a real `.env` also exists.
+touch a real Supabase endpoint. `load_dotenv()` in app/config.py never
+overrides variables already present in the environment, so these values win
+even if a real `.env` also exists. (Gemini calls go through the
+gemini-proxy Edge Function now -- app/config.py no longer reads a
+GEMINI_API_KEY at all, so there's nothing to stub for it here.)
 """
 import os
 
-os.environ.setdefault("GEMINI_API_KEY", "test-gemini-key")
 os.environ.setdefault("USDA_API_KEY", "test-usda-key")
 os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")

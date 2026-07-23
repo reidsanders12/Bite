@@ -12,6 +12,72 @@
 -- This file is safe to re-run: tables use `if not exists` and every policy
 -- is dropped before being recreated.
 
+-- Profiles: currently holds just the `is_admin` flag. Everything else about
+-- a user (name, biometrics, workout goals) lives in auth.users.user_metadata
+-- via GoTrue, not here -- this table exists purely so the Sponsor Requests
+-- admin gate (further below) can check a real, non-spoofable database flag
+-- instead of the caller-supplied `auth.email()` string. Relying on
+-- auth.email() alone is unsafe if email confirmation is ever turned off (or
+-- was off when an account was created): an attacker can register a brand
+-- new account using someone else's email address and get a live session
+-- where auth.email() returns that string, without ever proving they own
+-- that mailbox. Turn on email confirmation in Dashboard -> Authentication
+-- -> Providers as well -- this table is a second, independent layer, not a
+-- replacement for that.
+create table if not exists profiles (
+    id uuid primary key references auth.users(id) on delete cascade,
+    is_admin boolean not null default false
+);
+
+alter table profiles enable row level security;
+
+drop policy if exists "profiles_select_self" on profiles;
+create policy "profiles_select_self" on profiles
+    for select to authenticated using (id = auth.uid());
+
+-- Deliberately no insert/update policy for authenticated/anon: rows (and
+-- especially the is_admin flag) are only ever created/edited by you, from
+-- the Supabase Table Editor / SQL editor -- never by the app or its users.
+-- (The trigger below runs as SECURITY DEFINER, so it can insert despite
+-- there being no insert policy for regular users.)
+
+-- Auto-creates a (non-admin) profile row for every new signup, so the
+-- admin-check policies further below can always join against this table
+-- instead of getting no row at all for brand-new accounts.
+create or replace function handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+    insert into profiles (id, is_admin) values (new.id, false)
+    on conflict (id) do nothing;
+    return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+    after insert on auth.users
+    for each row execute function handle_new_user();
+
+-- Backfills a profile row for any account(s) that already existed before
+-- this migration ran (the trigger above only fires for signups from now
+-- on). Safe to re-run -- `on conflict do nothing` skips rows that already
+-- have one.
+insert into profiles (id, is_admin)
+select id, false from auth.users
+on conflict (id) do nothing;
+
+-- One-time step you run yourself, once, to make your own account the
+-- admin (replace the email, then run just this one statement -- everything
+-- above is fine to re-run as-is on every deploy, this line is not, since
+-- re-running it after you've since revoked admin from that account would
+-- silently re-grant it):
+--   update profiles set is_admin = true
+--   where id = (select id from auth.users where email = 'you@example.com');
+
 create table if not exists circles (
     id bigint generated always as identity primary key,
     name text not null,
@@ -135,16 +201,23 @@ create policy "sponsors_insert_public_submission" on sponsors
     with check (status = 'pending' and active = false);
 
 -- Owner-only review access: lets you see and moderate every sponsor row
--- regardless of status from the in-app "Sponsor Requests" screen. Scoped to
--- reidsanders12@gmail.com -- also set that same address as ADMIN_EMAIL in
--- your .env so the app knows to show that account the review screen.
+-- regardless of status from the in-app "Sponsor Requests" screen. Checks
+-- the profiles.is_admin flag (set once, manually, by you -- see the
+-- profiles table above) rather than a hardcoded email string: `auth.email()`
+-- is whatever the caller registered with, which isn't proof of anything
+-- unless email confirmation is also enforced. Also set that same address
+-- as ADMIN_EMAIL in your .env -- that's a second, app-layer check the UI
+-- uses to decide whether to even show the nav link; this policy is the one
+-- that actually matters for security.
 drop policy if exists "sponsors_select_owner" on sponsors;
 create policy "sponsors_select_owner" on sponsors
-    for select to authenticated using (auth.email() = 'reidsanders12@gmail.com');
+    for select to authenticated
+    using (exists (select 1 from profiles where id = auth.uid() and is_admin));
 
 drop policy if exists "sponsors_update_owner" on sponsors;
 create policy "sponsors_update_owner" on sponsors
-    for update to authenticated using (auth.email() = 'reidsanders12@gmail.com');
+    for update to authenticated
+    using (exists (select 1 from profiles where id = auth.uid() and is_admin));
 
 drop policy if exists "workout_logs_select_own" on workout_logs;
 create policy "workout_logs_select_own" on workout_logs
@@ -186,12 +259,39 @@ as $$
     select circle_id from circle_members where user_id = auth.uid()
 $$;
 
--- circles: name/goal text only, nothing sensitive -- any signed-in user can
--- read (needed to look a circle up by invite code before joining it) or
--- create one. Only the creator can rename/delete.
+-- circles: readable by the creator and by existing members only -- NOT by
+-- every authenticated user. (Previously this was `using (true)`, which let
+-- any signed-in user enumerate every circle's name and goal_description
+-- app-wide, not just ones they belong to or hold an invite code for.
+-- Nothing sensitive lives in this table, but that was broader exposure
+-- than the UI implies, and more than the stated purpose -- "look a circle
+-- up by invite code before joining" -- actually needs.) Looking a circle up
+-- by invite code before joining now goes through the
+-- find_circle_by_invite_code() function below instead, which is
+-- SECURITY DEFINER and only ever returns the single row matching an exact
+-- code the caller already has -- not the whole table.
 drop policy if exists "circles_select_authenticated" on circles;
-create policy "circles_select_authenticated" on circles
-    for select to authenticated using (true);
+drop policy if exists "circles_select_own_or_member" on circles;
+create policy "circles_select_own_or_member" on circles
+    for select to authenticated using (
+        created_by = auth.uid()
+        or id in (select my_circle_ids())
+    );
+
+-- Looks up a single circle by its exact invite code, for the "Join a
+-- Circle" flow. SECURITY DEFINER so it can find the row even though the
+-- caller isn't a member yet (that's the whole point -- they're about to
+-- become one) without re-opening blanket table-wide read access the way
+-- the old `circles_select_authenticated` policy did.
+create or replace function find_circle_by_invite_code(code text)
+returns setof circles
+language sql
+security definer
+stable
+set search_path = public
+as $$
+    select * from circles where invite_code = upper(trim(code))
+$$;
 
 drop policy if exists "circles_insert_own" on circles;
 create policy "circles_insert_own" on circles

@@ -110,3 +110,8 @@ class CircleMemberStatus(BaseModel):
     display_name: str
     checked_in_today: bool = False
     streak_days: int = 0
+
+
+class LogStreak(BaseModel):
+    current_streak: int = 0
+    logged_today: bool = False
