@@ -1,9 +1,17 @@
 flet==0.28.3
 python-dotenv==1.2.1
-pydantic==2.13.4
+# 2.13.4 pulls in pydantic-core==2.46.4, which (like opencv-python 5.0.0.93
+# above) has no published Android wheel and breaks `flet build apk`.
+# 2.13.3 pulls in pydantic-core==2.46.3, which does have one.
+pydantic==2.13.3
 httpx==0.28.1
 supabase==2.31.0
-opencv-python==5.0.0.93
+# Pinned to the newest version with a published Android wheel -- 5.0.0.93
+# (PyPI's current default) has no Android build at all, so `flet build apk`
+# fails outright with "Could not find a version that satisfies the
+# requirement opencv-python==5.0.0.93" for every Android ABI. 4.12.0.88 is
+# the newest version that actually has one.
+opencv-python==4.12.0.88
 
 # Pinned explicitly (not just left to pip's transitive resolution): flet==0.28.3's
 # socket layer throws "Receive loop error: 'text'" against any non-localhost

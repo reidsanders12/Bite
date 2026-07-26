@@ -2,15 +2,18 @@
 import flet as ft
 import asyncio
 from app import theme
-from app.camera_engine import CameraEngine
+from app.camera_engine import BLANK_FRAME_B64, CameraEngine
 from app import ai_engine
 
 camera_manager = CameraEngine()
 
 def build_snap_view(page: ft.Page, state) -> ft.View:
-    # Placeholder asset text while camera warmups trigger
+    # An empty string here isn't a valid image source either -- Flet shows a
+    # red "Either src or src_base64 must be specified" error for any frame
+    # this is visible without a real one, so it needs an actual (blank)
+    # placeholder image until the first camera frame arrives.
     view_stream = ft.Image(
-        src_base64="",
+        src_base64=BLANK_FRAME_B64,
         width=320,
         height=320,
         fit=ft.ImageFit.COVER,

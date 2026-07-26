@@ -106,8 +106,10 @@ _MEAL_SUGGESTION_INSTRUCTION = (
     "Suggest ONE specific meal or snack the user could eat right now. It must "
     "realistically fit within the remaining calories and macros shown above -- "
     "never exceed the remaining budget. Give a short one-to-two sentence rationale "
-    "tying the choice to their remaining macros and stated goals, and list concrete "
-    "ingredients with rough quantities."
+    "tying the choice to their remaining macros and stated goals, list concrete "
+    "ingredients with rough quantities, and provide clear, ordered step-by-step "
+    "instructions for how to actually prepare and cook it -- a real recipe someone "
+    "could follow from scratch, not just a description of the finished dish."
 )
 
 _WORKOUT_PLAN_INSTRUCTION = (

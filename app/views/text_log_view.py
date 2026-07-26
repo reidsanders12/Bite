@@ -24,6 +24,15 @@ from app import theme
 from app.state import AppState
 from app.views.widgets import error_banner, loading_view
 
+# Module-level singleton (same pattern as snap_view.camera_manager) -- a
+# fresh AudioRecorder was previously created on every visit to this view and
+# swapped into page.overlay, tearing down and re-requesting the native mic
+# resource each time. After a few open/close cycles that repeated
+# create/destroy churn left the platform-side recorder in a bad state
+# (start_recording_async silently failing). Reusing one instance for the
+# life of the app avoids the churn entirely.
+_audio_recorder = ft.AudioRecorder(audio_encoder=ft.AudioEncoder.WAV)
+
 
 def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
     text_field = ft.TextField(
@@ -53,12 +62,11 @@ def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
         disabled=not voice_supported,
     )
 
-    audio_recorder = ft.AudioRecorder(audio_encoder=ft.AudioEncoder.WAV)
-    if voice_supported:
-        # page.overlay is page-scoped, not view-scoped -- it survives across
-        # rebuilds of this view (e.g. navigating back to it), so without
-        # this filter every revisit would stack up another AudioRecorder.
-        page.overlay[:] = [c for c in page.overlay if not isinstance(c, ft.AudioRecorder)]
+    audio_recorder = _audio_recorder
+    if voice_supported and audio_recorder not in page.overlay:
+        # page.overlay is page-scoped and survives across rebuilds of this
+        # view -- add the shared recorder once and leave it there rather
+        # than recreating/swapping a new native recorder on every visit.
         page.overlay.append(audio_recorder)
 
     def reset_mic_button():

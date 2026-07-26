@@ -2,6 +2,7 @@
 Cloud Data Layer via Supabase PostgreSQL.
 Handles multi-user row scoping utilizing authenticated user session identifiers.
 """
+import logging
 import secrets
 import string
 from datetime import date, timedelta
@@ -9,6 +10,8 @@ from typing import List, Optional
 from supabase import create_client, Client
 from app.config import SUPABASE_URL, SUPABASE_ANON_KEY
 from app.models import Circle, CircleMemberStatus, LogStreak, UserGoals
+
+logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self):
@@ -39,7 +42,7 @@ class Database:
         try:
             self.client.auth.update_user({"data": data})
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to update profile metadata: {e}")
+            logger.error(f"Failed to update profile metadata: {e}")
 
     def get_profile_data(self) -> dict:
         """Reads the signed-in user's full auth metadata blob."""
@@ -48,7 +51,7 @@ class Database:
             if user_res and user_res.user:
                 return user_res.user.user_metadata or {}
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to read profile metadata: {e}")
+            logger.error(f"Failed to read profile metadata: {e}")
         return {}
 
     def get_current_user_id(self) -> Optional[str]:
@@ -81,7 +84,7 @@ class Database:
         """Inserts a new log entry explicitly scoped to the active signed-in user."""
         uid = self.get_current_user_id()
         if not uid:
-            print("[Supabase Sync Error] Aborting write payload: No active user session.")
+            logger.error("Aborting write payload: No active user session.")
             return
 
         try:
@@ -94,9 +97,9 @@ class Database:
                 "fat": int(fat)
             }
             self.client.table("food_logs").insert(payload).execute()
-            print(f"[Supabase Database Engine] Committed food entry cleanly for UUID: {uid}")
+            logger.info(f"Committed food entry cleanly for UUID: {uid}")
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to log food: {e}")
+            logger.error(f"Failed to log food: {e}")
 
     def get_all_logs(self) -> List[dict]:
         """Fetches the full logging history for the active user (all time)."""
@@ -114,7 +117,7 @@ class Database:
             )
             return response.data or []
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch logs: {e}")
+            logger.error(f"Failed to fetch logs: {e}")
             return []
 
     def get_logs_for_date(self, date_iso: str) -> List[dict]:
@@ -135,7 +138,7 @@ class Database:
             )
             return response.data or []
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch today's logs: {e}")
+            logger.error(f"Failed to fetch today's logs: {e}")
             return []
 
     def get_log_streak(self) -> LogStreak:
@@ -173,7 +176,7 @@ class Database:
 
             return LogStreak(current_streak=streak, logged_today=logged_today)
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to compute log streak: {e}")
+            logger.error(f"Failed to compute log streak: {e}")
             return LogStreak()
 
     def delete_log_entry(self, entry_id: int) -> tuple[bool, str]:
@@ -194,11 +197,11 @@ class Database:
                 self.client.table("food_logs").delete().eq("id", entry_id).eq("user_id", uid).execute()
             )
             if not response.data:
-                print("[Supabase Sync Error] Delete was blocked (0 rows affected) -- check the DELETE RLS policy on food_logs.")
+                logger.error("Delete was blocked (0 rows affected) -- check the DELETE RLS policy on food_logs.")
                 return False, "Couldn't delete that entry -- please try again."
             return True, ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to purge remote row: {e}")
+            logger.error(f"Failed to purge remote row: {e}")
             # Generic message for the UI -- the real exception is already
             # printed above (Supabase/Postgres internals shouldn't reach the
             # end user, who has no use for an RLS policy name or table name).
@@ -218,7 +221,7 @@ class Database:
         uid = self.get_current_user_id()
         if not uid:
             msg = "No active user session."
-            print(f"[Supabase Sync Error] Aborting goal save: {msg}")
+            logger.error(f"Aborting goal save: {msg}")
             return False, msg
 
         payload = {
@@ -234,10 +237,10 @@ class Database:
                 self.client.table("user_goals").update(payload).eq("user_id", uid).execute()
             else:
                 self.client.table("user_goals").insert(payload).execute()
-            print(f"[Supabase Database Engine] Synchronized target goal parameters for UUID: {uid}")
+            logger.info(f"Synchronized target goal parameters for UUID: {uid}")
             return True, ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to save goals: {e}")
+            logger.error(f"Failed to save goals: {e}")
             # Generic message for the UI -- the real exception is already
             # printed above (Supabase/Postgres internals shouldn't reach the
             # end user, who has no use for an RLS policy name or table name).
@@ -268,7 +271,7 @@ class Database:
                 )
             return None
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to read remote goals: {e}")
+            logger.error(f"Failed to read remote goals: {e}")
             return None
 
     # --- FRIEND CIRCLES ---
@@ -312,7 +315,7 @@ class Database:
             }).execute()
             return self._row_to_circle(row), ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to create circle: {e}")
+            logger.error(f"Failed to create circle: {e}")
             return None, "Something went wrong -- please try again."
 
     def join_circle(self, invite_code: str, display_name: str) -> tuple[Optional[Circle], str]:
@@ -344,7 +347,7 @@ class Database:
             }).execute()
             return self._row_to_circle(row), ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to join circle: {e}")
+            logger.error(f"Failed to join circle: {e}")
             return None, "Something went wrong -- please try again."
 
     def get_my_circles(self) -> List[Circle]:
@@ -364,7 +367,7 @@ class Database:
             circles = self.client.table("circles").select("*").in_("id", circle_ids).execute()
             return [self._row_to_circle(row) for row in (circles.data or [])]
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch circles: {e}")
+            logger.error(f"Failed to fetch circles: {e}")
             return []
 
     def update_circle_goal(
@@ -393,11 +396,11 @@ class Database:
             )
             if not response.data:
                 msg = "Update was blocked -- only the circle's creator can edit its goal."
-                print(f"[Supabase Sync Error] {msg}")
+                logger.error(msg)
                 return False, msg
             return True, ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to update circle goal: {e}")
+            logger.error(f"Failed to update circle goal: {e}")
             # Generic message for the UI -- the real exception is already
             # printed above (Supabase/Postgres internals shouldn't reach the
             # end user, who has no use for an RLS policy name or table name).
@@ -419,11 +422,11 @@ class Database:
             )
             if not response.data:
                 msg = "Delete was blocked -- only the circle's creator can delete it."
-                print(f"[Supabase Sync Error] {msg}")
+                logger.error(msg)
                 return False, msg
             return True, ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to delete circle: {e}")
+            logger.error(f"Failed to delete circle: {e}")
             # Generic message for the UI -- the real exception is already
             # printed above (Supabase/Postgres internals shouldn't reach the
             # end user, who has no use for an RLS policy name or table name).
@@ -438,7 +441,7 @@ class Database:
         try:
             self.client.table("circle_members").delete().eq("circle_id", circle_id).eq("user_id", uid).execute()
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to leave circle: {e}")
+            logger.error(f"Failed to leave circle: {e}")
 
     def check_in(self, circle_id: int) -> None:
         """Records that the caller met their circle's goal today (idempotent per day)."""
@@ -456,7 +459,7 @@ class Database:
             # Expected (and harmless) once today's row already exists --
             # the unique (circle_id, user_id, checkin_date) constraint blocks
             # a duplicate check-in for the same day.
-            print(f"[Supabase Sync Error] Check-in not recorded (likely already checked in today): {e}")
+            logger.error(f"Check-in not recorded (likely already checked in today): {e}")
 
     def get_circle_status(self, circle_id: int) -> List[CircleMemberStatus]:
         """Returns every member's today/streak status for one circle.
@@ -506,7 +509,7 @@ class Database:
                 ))
             return statuses
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch circle status: {e}")
+            logger.error(f"Failed to fetch circle status: {e}")
             return []
 
     # --- WORKOUT LOGS ---
@@ -515,7 +518,7 @@ class Database:
         """Inserts a new workout entry scoped to the active signed-in user."""
         uid = self.get_current_user_id()
         if not uid:
-            print("[Supabase Sync Error] Aborting workout write: No active user session.")
+            logger.error("Aborting workout write: No active user session.")
             return
 
         try:
@@ -526,7 +529,7 @@ class Database:
                 "calories_burned": int(calories_burned),
             }).execute()
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to log workout: {e}")
+            logger.error(f"Failed to log workout: {e}")
 
     def get_workout_logs_for_date(self, date_iso: str) -> List[dict]:
         """Fetches the caller's workout entries created on the given local date."""
@@ -546,7 +549,7 @@ class Database:
             )
             return response.data or []
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch today's workouts: {e}")
+            logger.error(f"Failed to fetch today's workouts: {e}")
             return []
 
     def get_all_workout_logs(self) -> List[dict]:
@@ -565,7 +568,7 @@ class Database:
             )
             return response.data or []
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch workout history: {e}")
+            logger.error(f"Failed to fetch workout history: {e}")
             return []
 
     def delete_workout_log(self, entry_id: int) -> tuple[bool, str]:
@@ -580,11 +583,11 @@ class Database:
                 self.client.table("workout_logs").delete().eq("id", entry_id).eq("user_id", uid).execute()
             )
             if not response.data:
-                print("[Supabase Sync Error] Delete was blocked (0 rows affected) -- check the DELETE RLS policy on workout_logs.")
+                logger.error("Delete was blocked (0 rows affected) -- check the DELETE RLS policy on workout_logs.")
                 return False, "Couldn't delete that entry -- please try again."
             return True, ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to delete workout: {e}")
+            logger.error(f"Failed to delete workout: {e}")
             # Generic message for the UI -- the real exception is already
             # printed above (Supabase/Postgres internals shouldn't reach the
             # end user, who has no use for an RLS policy name or table name).
@@ -596,7 +599,7 @@ class Database:
         """Inserts a new weight entry (always stored in kg) for the active user."""
         uid = self.get_current_user_id()
         if not uid:
-            print("[Supabase Sync Error] Aborting weight write: No active user session.")
+            logger.error("Aborting weight write: No active user session.")
             return
 
         try:
@@ -605,7 +608,7 @@ class Database:
                 "weight_kg": float(weight_kg),
             }).execute()
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to log weight: {e}")
+            logger.error(f"Failed to log weight: {e}")
 
     def get_weight_history(self) -> List[dict]:
         """Fetches the caller's full weight history, oldest first (for a trend chart)."""
@@ -623,7 +626,7 @@ class Database:
             )
             return response.data or []
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch weight history: {e}")
+            logger.error(f"Failed to fetch weight history: {e}")
             return []
 
     def delete_weight_log(self, entry_id: int) -> tuple[bool, str]:
@@ -638,11 +641,11 @@ class Database:
                 self.client.table("weight_logs").delete().eq("id", entry_id).eq("user_id", uid).execute()
             )
             if not response.data:
-                print("[Supabase Sync Error] Delete was blocked (0 rows affected) -- check the DELETE RLS policy on weight_logs.")
+                logger.error("Delete was blocked (0 rows affected) -- check the DELETE RLS policy on weight_logs.")
                 return False, "Couldn't delete that entry -- please try again."
             return True, ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to delete weight entry: {e}")
+            logger.error(f"Failed to delete weight entry: {e}")
             # Generic message for the UI -- the real exception is already
             # printed above (Supabase/Postgres internals shouldn't reach the
             # end user, who has no use for an RLS policy name or table name).
@@ -663,7 +666,7 @@ class Database:
             )
             return response.data or []
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch sponsors: {e}")
+            logger.error(f"Failed to fetch sponsors: {e}")
             return []
 
     def get_all_sponsors(self) -> List[dict]:
@@ -680,7 +683,7 @@ class Database:
             )
             return response.data or []
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to fetch sponsor requests: {e}")
+            logger.error(f"Failed to fetch sponsor requests: {e}")
             return []
 
     def update_sponsor_status(self, sponsor_id: int, status: str, active: bool) -> tuple[bool, str]:
@@ -695,11 +698,11 @@ class Database:
             )
             if not response.data:
                 msg = "Update was blocked -- only the configured admin account can review sponsors."
-                print(f"[Supabase Sync Error] {msg}")
+                logger.error(msg)
                 return False, msg
             return True, ""
         except Exception as e:
-            print(f"[Supabase Sync Error] Failed to update sponsor status: {e}")
+            logger.error(f"Failed to update sponsor status: {e}")
             # Generic message for the UI -- the real exception is already
             # printed above (Supabase/Postgres internals shouldn't reach the
             # end user, who has no use for an RLS policy name or table name).

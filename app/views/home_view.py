@@ -44,7 +44,8 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
             consumed_pro += int(log.get("protein", 0) if isinstance(log, dict) else getattr(log, "protein", 0))
             consumed_carb += int(log.get("carbs", 0) if isinstance(log, dict) else getattr(log, "carbs", 0))
             consumed_fat += int(log.get("fat", 0) if isinstance(log, dict) else getattr(log, "fat", 0))
-        except: pass
+        except (TypeError, ValueError):
+            pass
 
     target_cal = int(getattr(goals, "daily_calories", 2000) if not isinstance(goals, dict) else goals.get("daily_calories", 2000))
     target_pro = int(getattr(goals, "daily_protein", 150) if not isinstance(goals, dict) else goals.get("daily_protein", 150))

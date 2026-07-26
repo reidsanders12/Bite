@@ -1,5 +1,10 @@
-import traceback
+import logging
+
 import flet as ft
+
+from app.logging_config import configure_logging
+
+configure_logging()
 
 # 1. IMPORT CONFIG FIRST (It loads everything into the environment automatically on import)
 from app import config
@@ -24,6 +29,8 @@ from app.views.weight_view import build_weight_view
 from app.views.workout_history_view import build_workout_history_view
 
 # 2. Append it cleanly inside your VIEW_BUILDERS map allocation table
+logger = logging.getLogger(__name__)
+
 VIEW_BUILDERS = {
     "/auth": build_auth_view,
     "/": build_home_view,
@@ -85,10 +92,9 @@ def main(page: ft.Page):
                 else:
                     page.views.append(build_home_view(page, state))
                     
-            except Exception as err:
-                print("!!! ROUTING CRASH ENCOUNTERED !!!")
-                traceback.print_exc()
-                
+            except Exception:
+                logger.exception("Routing crash while building view for route %r", page.route)
+
                 page.views.append(
                     ft.View(
                         route="/error",

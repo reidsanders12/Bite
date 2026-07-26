@@ -63,6 +63,9 @@ class MealSuggestion(BaseModel):
     ingredients: List[str] = Field(
         description="Ingredients with rough quantities, e.g. '150g grilled chicken breast'"
     )
+    instructions: List[str] = Field(
+        description="Ordered, step-by-step preparation/cooking instructions a user could actually follow to make this meal"
+    )
 
 
 class WorkoutExercise(BaseModel):

@@ -2,9 +2,13 @@
 Authentication Portal View.
 Handles user registration and secure session login validation via Supabase Auth services.
 """
+import logging
+
 import flet as ft
 from app import theme
 from app.state import AppState
+
+logger = logging.getLogger(__name__)
 
 def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
     mode = {"value": "login"}  # "login" | "register"
@@ -92,7 +96,7 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
         except Exception as err:
             # Generic message to the user -- the real exception (which can
             # include Supabase/GoTrue internals) goes to the console only.
-            print(f"[Auth Error] Sign in failed: {err}")
+            logger.error("Sign in failed: %s", err)
             status_msg.value = "Sign in failed. Please check your email and password and try again."
             status_msg.color = theme.ERROR
             page.update()
@@ -136,7 +140,7 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                 page.update()
 
         except Exception as err:
-            print(f"[Auth Error] Registration failed: {err}")
+            logger.error("Registration failed: %s", err)
             status_msg.value = "Registration failed. Please double-check your details and try again."
             status_msg.color = theme.ERROR
             page.update()

@@ -2,12 +2,15 @@
 Central Application State Engine.
 Sitting in the Root Directory next to main.py.
 """
+import logging
 from datetime import date
 from typing import Any, Optional
 
 from app.config import ADMIN_EMAIL
 from app.database import Database
 from app.models import Circle, LogStreak, UserGoals
+
+logger = logging.getLogger(__name__)
 
 class AppState:
     def __init__(self):
@@ -46,21 +49,21 @@ class AppState:
         try:
             self.daily_logs = self.db.get_logs_for_date(date.today().isoformat())
         except Exception as err:
-            print(f"[STATE ERROR] Timeline sync failed: {str(err)}")
+            logger.error("Timeline sync failed: %s", err)
 
     def refresh_history(self) -> None:
         """Pulls the full all-time food log history (for the history screen)."""
         try:
             self.history_logs = self.db.get_all_logs()
         except Exception as err:
-            print(f"[STATE ERROR] History sync failed: {str(err)}")
+            logger.error("History sync failed: %s", err)
 
     def refresh_log_streak(self) -> None:
         """Pulls the caller's current consecutive-day food-logging streak (home dashboard)."""
         try:
             self.log_streak = self.db.get_log_streak()
         except Exception as err:
-            print(f"[STATE ERROR] Streak sync failed: {str(err)}")
+            logger.error("Streak sync failed: %s", err)
             self.log_streak = LogStreak()
 
     def get_log_streak(self) -> LogStreak:
@@ -72,7 +75,7 @@ class AppState:
         try:
             self.user_goals = self.db.get_goals() or UserGoals()
         except Exception as err:
-            print(f"[STATE ERROR] Goal threshold sync failed: {str(err)}")
+            logger.error("Goal threshold sync failed: %s", err)
             self.user_goals = UserGoals()
 
     def refresh_profile(self) -> None:
@@ -87,7 +90,7 @@ class AppState:
                 )
                 self.profile_data = meta
         except Exception as err:
-            print(f"[STATE ERROR] Profile sync failed: {str(err)}")
+            logger.error("Profile sync failed: %s", err)
 
     def get_profile_data(self) -> dict:
         """Returns cached biometric/location inputs from the last onboarding run, if any."""
@@ -103,7 +106,7 @@ class AppState:
         try:
             return self.db.get_goals() is not None
         except Exception as err:
-            print(f"[STATE ERROR] Onboarding check failed: {str(err)}")
+            logger.error("Onboarding check failed: %s", err)
             return True
 
     def log_food(self, name: str, cal: int, pro: int, carb: int, fat: int) -> None:
@@ -118,7 +121,7 @@ class AppState:
         try:
             self.daily_workouts = self.db.get_workout_logs_for_date(date.today().isoformat())
         except Exception as err:
-            print(f"[STATE ERROR] Workout sync failed: {str(err)}")
+            logger.error("Workout sync failed: %s", err)
 
     def get_daily_workouts(self) -> list:
         """Returns today's cached workout entries."""
@@ -135,7 +138,7 @@ class AppState:
         try:
             self.workout_history = self.db.get_all_workout_logs()
         except Exception as err:
-            print(f"[STATE ERROR] Workout history sync failed: {str(err)}")
+            logger.error("Workout history sync failed: %s", err)
 
     def get_workout_history(self) -> list:
         """Returns the cached full workout history."""
@@ -167,7 +170,7 @@ class AppState:
         try:
             self.weight_history = self.db.get_weight_history()
         except Exception as err:
-            print(f"[STATE ERROR] Weight history sync failed: {str(err)}")
+            logger.error("Weight history sync failed: %s", err)
 
     def get_weight_history(self) -> list:
         """Returns the cached weight history, oldest first."""
@@ -190,7 +193,7 @@ class AppState:
         try:
             self.sponsors = self.db.get_active_sponsors()
         except Exception as err:
-            print(f"[STATE ERROR] Sponsor sync failed: {str(err)}")
+            logger.error("Sponsor sync failed: %s", err)
             self.sponsors = []
 
     def get_sponsors(self) -> list:
@@ -210,7 +213,7 @@ class AppState:
         try:
             self.sponsor_requests = self.db.get_all_sponsors()
         except Exception as err:
-            print(f"[STATE ERROR] Sponsor request sync failed: {str(err)}")
+            logger.error("Sponsor request sync failed: %s", err)
             self.sponsor_requests = []
 
     def get_sponsor_requests(self) -> list:
@@ -336,7 +339,7 @@ class AppState:
         try:
             self.circles = self.db.get_my_circles()
         except Exception as err:
-            print(f"[STATE ERROR] Circle sync failed: {str(err)}")
+            logger.error("Circle sync failed: %s", err)
             self.circles = []
 
     def get_circles(self) -> list:

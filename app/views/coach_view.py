@@ -202,6 +202,21 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
                         [ft.Text(f"• {item}", size=13, color=theme.TEXT_PRIMARY) for item in suggestion.ingredients],
                         spacing=4,
                     ),
+                    ft.Text("How to make it", size=12, weight="bold", color=theme.TEXT_MUTED),
+                    ft.Column(
+                        [
+                            ft.Row(
+                                [
+                                    ft.Text(f"{i + 1}.", size=13, weight="bold", color=theme.TEXT_MUTED, width=18),
+                                    ft.Text(step, size=13, color=theme.TEXT_PRIMARY, expand=True),
+                                ],
+                                spacing=8,
+                                vertical_alignment=ft.CrossAxisAlignment.START,
+                            )
+                            for i, step in enumerate(suggestion.instructions)
+                        ],
+                        spacing=6,
+                    ),
                     ft.Row([log_button, log_status], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                 ],
                 spacing=12,

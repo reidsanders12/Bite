@@ -1,0 +1,17 @@
+[project]
+name = "bite"
+version = "0.1.0"
+description = "Frictionless AI photo logging for calories and macros"
+
+[tool.flet]
+product = "Bite"
+org = "com.bite"
+
+# Cross-platform permissions `flet build apk|ipa|macos` should always bake
+# in -- without these, a compiled build (unlike `flet run`) has no
+# NSCameraUsageDescription/NSMicrophoneUsageDescription (iOS) or
+# CAMERA/RECORD_AUDIO (Android) declarations, so the OS silently denies (or,
+# on iOS, hard-crashes) any camera/mic request from Snap & Log, the barcode
+# scanner, or voice logging. `location` isn't listed -- this app has no
+# location-based features.
+permissions = ["camera", "microphone"]

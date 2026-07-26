@@ -4,6 +4,8 @@ Exercises public Open Food Facts API and USDA FoodData Central pipelines.
 """
 
 import asyncio
+import logging
+
 import flet as ft
 
 from app import food_apis
@@ -11,6 +13,9 @@ from app import theme
 from app.state import AppState
 from app.views.widgets import error_banner, loading_view
 from app.views.snap_view import camera_manager  # Centralized camera helper engine
+from app.camera_engine import BLANK_FRAME_B64
+
+logger = logging.getLogger(__name__)
 
 
 def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
@@ -36,6 +41,7 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
     )
 
     barcode_stream_view = ft.Image(
+        src_base64=BLANK_FRAME_B64,
         width=320,
         height=200,
         fit=ft.ImageFit.COVER,
@@ -91,10 +97,31 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
 
     # 3. Barcode Scanning Pipeline Runtime Hooks
     async def handle_detected_barcode(scanned_code: str):
-        barcode_field.value = scanned_code
-        stop_barcode_camera()
-        page.update()
-        await on_barcode_search(None)
+        try:
+            barcode_field.value = scanned_code
+            # Reset the scan button/flag directly rather than calling
+            # stop_barcode_camera() -- that would also hide
+            # barcode_stream_view, which camera_engine just froze on the
+            # exact frame the barcode was recognized in. Leaving it visible
+            # gives a "captured this" confirmation while the lookup below
+            # runs, instead of the preview vanishing with nothing to show
+            # for it.
+            camera_active[0] = False
+            scan_btn.text = "Live Scan Barcode"
+            scan_btn.style = ft.ButtonStyle(bgcolor=theme.ACCENT, color=theme.ACCENT_ON)
+            page.update()
+            await on_barcode_search(None)
+        except Exception as exc:
+            # Belt-and-suspenders: on_barcode_search already catches its own
+            # lookup errors and shows a banner, so this only fires for
+            # something unexpected (e.g. a UI update failing). Previously an
+            # error here had nowhere to go and vanished silently, leaving a
+            # stopped camera with no result and no explanation.
+            logger.exception("Failed to process detected barcode %r", scanned_code)
+            results_area.controls = [
+                error_banner(f"Scanned {scanned_code}, but couldn't look it up: {exc}")
+            ]
+            page.update()
 
     def toggle_barcode_camera():
         if not camera_active[0]:

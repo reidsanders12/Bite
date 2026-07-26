@@ -3,9 +3,13 @@ Log Confirmation View.
 Tracks entries by fractional or whole serving units (multipliers) rather than raw grams,
 and ensures a hard refresh layout sweep back to the primary dashboard.
 """
+import logging
+
 import flet as ft
 
 from app import theme
+
+logger = logging.getLogger(__name__)
 
 def build_confirm_view(page: ft.Page, state) -> ft.View:
     # 1. Safely retrieve the staged Pydantic object from your updated AppState memory
@@ -143,7 +147,7 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
             page.go("/")
             
         except Exception as err:
-            print(f"[UI Error] Couldn't save logged entry: {err}")
+            logger.error("Couldn't save logged entry: %s", err)
             status_msg.value = "Couldn't save -- please try again."
             page.update()
 
