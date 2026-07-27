@@ -253,6 +253,45 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
         page.views.clear()
         page.go("/auth")
 
+    delete_account_status = ft.Text("", size=12, color=theme.ERROR)
+    delete_account_dialog = ft.AlertDialog(modal=True)
+
+    def open_delete_confirm(e):
+        async def do_delete(e2):
+            delete_account_dialog.actions = [
+                ft.TextButton("Deleting...", disabled=True, style=ft.ButtonStyle(color=theme.TEXT_MUTED)),
+            ]
+            page.update()
+
+            success, err = await state.db.delete_account()
+            page.close(delete_account_dialog)
+            if success:
+                page.views.clear()
+                page.go("/auth")
+            else:
+                delete_account_status.value = f"Couldn't delete account: {err}"
+                page.update()
+
+        def confirm_click(e2):
+            page.run_task(do_delete, e2)
+
+        def cancel(e2):
+            page.close(delete_account_dialog)
+
+        delete_account_dialog.title = ft.Text("Delete your account?")
+        delete_account_dialog.content = ft.Text(
+            "This permanently deletes your account and everything in it: food "
+            "logs, workout history, weight history, and macro goals. Circles "
+            "you created will be deleted for every member; your membership in "
+            "circles you joined will be removed. This can't be undone."
+        )
+        delete_account_dialog.actions = [
+            ft.TextButton("Cancel", style=ft.ButtonStyle(color=theme.TEXT_MUTED), on_click=cancel),
+            ft.TextButton("Delete", style=ft.ButtonStyle(color=theme.ERROR), on_click=confirm_click),
+        ]
+        delete_account_status.value = ""
+        page.open(delete_account_dialog)
+
     return ft.View(
         route="/profile",
         bgcolor=theme.BG_CANVAS,
@@ -298,7 +337,14 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                         style=ft.ButtonStyle(color=theme.ERROR),
                         on_click=sign_out
                     ),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=15, scroll=ft.ScrollMode.AUTO),
+                    ft.TextButton(
+                        "Delete Account",
+                        icon=ft.Icons.DELETE_FOREVER_OUTLINED,
+                        style=ft.ButtonStyle(color=theme.ERROR),
+                        on_click=open_delete_confirm
+                    ),
+                    delete_account_status,
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=15, scroll=ft.ScrollMode.HIDDEN),
                 padding=20,
                 expand=True
             )

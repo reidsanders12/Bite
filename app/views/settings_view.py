@@ -74,7 +74,7 @@ def build_settings_view(page: ft.Page, state: AppState) -> ft.View:
                         save_status,
                     ],
                     spacing=14,
-                    scroll=ft.ScrollMode.AUTO,
+                    scroll=ft.ScrollMode.HIDDEN,
                 ),
                 padding=20,
                 expand=True,

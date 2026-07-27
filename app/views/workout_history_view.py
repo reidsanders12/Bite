@@ -12,7 +12,7 @@ def build_workout_history_view(page: ft.Page, state) -> ft.View:
 
     workouts = state.get_workout_history() if hasattr(state, "get_workout_history") else []
 
-    history_list = ft.Column(spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
+    history_list = ft.Column(spacing=12, scroll=ft.ScrollMode.HIDDEN, expand=True)
     confirm_dialog = ft.AlertDialog(modal=True)
     error_banner = ft.Text("", color=theme.ERROR, size=12)
 

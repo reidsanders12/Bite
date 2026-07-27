@@ -181,7 +181,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
             ),
         ],
         spacing=12,
-        width=150,
+        expand=True,
     )
 
     progress_card = ft.Container(
@@ -443,7 +443,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                     ft.Text("TODAY'S LINEUP", size=11, color=theme.TEXT_FAINT, weight="w700"),
                     timeline_items,
                     promo_card,
-                ], spacing=18, scroll=ft.ScrollMode.AUTO),
+                ], spacing=18, scroll=ft.ScrollMode.HIDDEN),
                 padding=ft.padding.symmetric(20, 24), expand=True
             )
         ]

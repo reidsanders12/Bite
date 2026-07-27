@@ -24,8 +24,8 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
     camera_active = [False]
 
     # Persistent layout container targeting rendering segments
-    tabs_content = ft.Container(expand=True)
-    results_area = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO)
+    tabs_content = ft.Container()
+    results_area = ft.Column(spacing=8, scroll=ft.ScrollMode.HIDDEN)
 
     # 1. UI Declarations
     barcode_field = ft.TextField(
@@ -253,7 +253,6 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
             ft.AppBar(
                 title=ft.Text("GLOBAL INDEX LOOKUP", size=16, weight="bold", font_family=theme.DISPLAY_FONT),
                 bgcolor=theme.BG_CANVAS,
-                color=theme.TEXT_PRIMARY,
                 elevation=0,
                 leading=ft.IconButton(
                     icon=ft.Icons.ARROW_BACK_IOS_NEW_ROUNDED,
@@ -269,7 +268,7 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
                 content=ft.Column(
                     [custom_tabs_bar, tabs_content, ft.Divider(color=theme.BORDER, height=20), results_area],
                     spacing=14,
-                    scroll=ft.ScrollMode.AUTO,
+                    scroll=ft.ScrollMode.HIDDEN,
                 ),
                 padding=24,
                 expand=True,

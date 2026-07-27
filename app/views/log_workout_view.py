@@ -146,7 +146,7 @@ def build_log_workout_view(page: ft.Page, state) -> ft.View:
                         ),
                     ],
                     spacing=16,
-                    scroll=ft.ScrollMode.AUTO,
+                    scroll=ft.ScrollMode.HIDDEN,
                 ),
                 padding=20,
                 expand=True,

@@ -18,6 +18,7 @@ import os
 import tempfile
 
 import flet as ft
+import flet_audio_recorder as far
 
 from app import ai_engine
 from app import theme
@@ -31,7 +32,7 @@ from app.views.widgets import error_banner, loading_view
 # create/destroy churn left the platform-side recorder in a bad state
 # (start_recording_async silently failing). Reusing one instance for the
 # life of the app avoids the churn entirely.
-_audio_recorder = ft.AudioRecorder(audio_encoder=ft.AudioEncoder.WAV)
+_audio_recorder = far.AudioRecorder(audio_encoder=far.AudioEncoder.WAV)
 
 
 def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
@@ -134,7 +135,7 @@ def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
         os.close(fd)
         recording_path["value"] = path
 
-        started = await audio_recorder.start_recording_async(output_path=path)
+        started = audio_recorder.start_recording(output_path=path)
         if not started:
             status_area.content = error_banner("Couldn't start recording -- try again.")
             page.update()

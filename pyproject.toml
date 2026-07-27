@@ -15,3 +15,22 @@ org = "com.bite"
 # scanner, or voice logging. `location` isn't listed -- this app has no
 # location-based features.
 permissions = ["camera", "microphone"]
+
+# Matches app.theme.BG_CANVAS -- without this the native splash and
+# Flutter's blank first frame default to white, which flashes against the
+# app's cream canvas once the Python side finishes booting and paints the
+# first real view. No dark theme exists yet, so dark_color is the same.
+[tool.flet.splash]
+color = "#FAF3EA"
+dark_color = "#FAF3EA"
+
+# flet 0.28.3's Flutter build template overrides `record` to ^5.1.1 (needed
+# by flet_audio_recorder), but the pub resolver still freely picks the
+# newest record_linux (0.7.2), which predates record_platform_interface's
+# 1.5.0 addition of a `request` parameter to `hasPermission()` -- RecordLinux
+# never got updated to match, so it fails to compile as a non-abstract
+# override ("missing implementations") during `flet build ipa`/`apk`, even
+# though this app never runs on Linux. Overriding record_linux directly to
+# a version built against platform_interface >=1.5.0 fixes the mismatch.
+[tool.flet.flutter.pubspec.dependency_overrides]
+record_linux = "^1.3.1"

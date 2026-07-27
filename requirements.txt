@@ -1,4 +1,8 @@
 flet==0.28.3
+# ft.AudioRecorder was split out of core flet into this separate package
+# starting around 0.26.0; the compiled build's Flutter template no longer
+# bundles it, so voice logging needs it installed explicitly.
+flet-audio-recorder==0.1.0
 python-dotenv==1.2.1
 # 2.13.4 pulls in pydantic-core==2.46.4, which (like opencv-python 5.0.0.93
 # above) has no published Android wheel and breaks `flet build apk`.

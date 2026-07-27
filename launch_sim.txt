@@ -1,0 +1,3 @@
+open -a Simulator --args -CurrentDeviceUDID 2070720B-375A-4AA0-9F09-D075D7B298DF
+xcrun simctl boot "iPhone 17 Pro"
+xcrun simctl launch "iPhone 17 Pro" com.bite.bite

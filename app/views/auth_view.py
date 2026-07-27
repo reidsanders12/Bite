@@ -2,6 +2,7 @@
 Authentication Portal View.
 Handles user registration and secure session login validation via Supabase Auth services.
 """
+import asyncio
 import logging
 
 import flet as ft
@@ -159,6 +160,27 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
 
     render_mode()
 
+    # Fades and scales up from just below full size on first paint -- this is
+    # the first thing Flet renders after the native splash hands off, so a
+    # quick entrance here bridges that handoff instead of a flat jump cut.
+    brand_icon = ft.Container(
+        content=ft.Icon(ft.Icons.RESTAURANT_ROUNDED, color=theme.ACCENT_ON, size=28),
+        width=56, height=56, bgcolor=theme.ACCENT, border_radius=theme.RADIUS_LG,
+        alignment=ft.alignment.center,
+        opacity=0,
+        scale=0.85,
+        animate_opacity=250,
+        animate_scale=ft.Animation(250, ft.AnimationCurve.EASE_OUT),
+    )
+
+    async def animate_brand_in():
+        await asyncio.sleep(0.05)
+        brand_icon.opacity = 1
+        brand_icon.scale = 1
+        page.update()
+
+    page.run_task(animate_brand_in)
+
     # 3. Layout Node Container Tree Structures
     return ft.View(
         route="/auth",
@@ -170,11 +192,7 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                 content=ft.Column([
                     # Title Header Branding Element
                     ft.Column([
-                        ft.Container(
-                            content=ft.Icon(ft.Icons.RESTAURANT_ROUNDED, color=theme.ACCENT_ON, size=28),
-                            width=56, height=56, bgcolor=theme.ACCENT, border_radius=theme.RADIUS_LG,
-                            alignment=ft.alignment.center,
-                        ),
+                        brand_icon,
                         ft.Divider(color="transparent", height=8),
                         ft.Text(
                             "Bite",

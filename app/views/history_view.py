@@ -14,7 +14,7 @@ def build_history_view(page: ft.Page, state) -> ft.View:
     daily_logs = state.get_history_logs() if hasattr(state, "get_history_logs") else getattr(state, "logs", [])
 
     # Container container reference layout to refresh list state dynamically
-    history_list = ft.Column(spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
+    history_list = ft.Column(spacing=12, scroll=ft.ScrollMode.HIDDEN, expand=True)
 
     confirm_dialog = ft.AlertDialog(modal=True)
     error_banner = ft.Text("", color=theme.ERROR, size=12)

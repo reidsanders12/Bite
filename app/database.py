@@ -7,6 +7,7 @@ import secrets
 import string
 from datetime import date, timedelta
 from typing import List, Optional
+import httpx
 from supabase import create_client, Client
 from app.config import SUPABASE_URL, SUPABASE_ANON_KEY
 from app.models import Circle, CircleMemberStatus, LogStreak, UserGoals
@@ -77,6 +78,41 @@ class Database:
         except Exception:
             pass
         return None
+
+    async def delete_account(self) -> tuple[bool, str]:
+        """Permanently deletes the signed-in user's account and all their app
+        data. Actual deletion happens server-side in the delete-account Edge
+        Function -- it needs the service-role key (auth.admin.deleteUser),
+        which this client only ever holds the anon key for, same reasoning as
+        why AI calls go through gemini-proxy instead of hitting Gemini
+        directly (see app/ai_engine.py)."""
+        access_token = self.get_access_token()
+        if not access_token:
+            return False, "You're not signed in -- please sign in again."
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "apikey": SUPABASE_ANON_KEY,
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"{SUPABASE_URL}/functions/v1/delete-account", headers=headers
+                )
+        except httpx.HTTPError as exc:
+            return False, f"Couldn't reach the server: {exc}"
+
+        if resp.status_code == 200:
+            return True, ""
+        if resp.status_code == 401:
+            return False, "Your session expired -- please sign in again."
+        try:
+            detail = resp.json().get("error")
+        except Exception:
+            detail = None
+        return False, detail or f"Account deletion failed ({resp.status_code})."
 
     # --- SCOPED DATA OPERATIONS ---
 

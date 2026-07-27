@@ -142,7 +142,7 @@ def build_sponsor_requests_view(page: ft.Page, state) -> ft.View:
                         rejected_cards,
                     ],
                     spacing=12,
-                    scroll=ft.ScrollMode.AUTO,
+                    scroll=ft.ScrollMode.HIDDEN,
                 ),
                 padding=20,
                 expand=True,

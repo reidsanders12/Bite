@@ -343,7 +343,7 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
                         status_txt,
                     ],
                     spacing=12,
-                    scroll=ft.ScrollMode.AUTO,
+                    scroll=ft.ScrollMode.HIDDEN,
                 ),
                 padding=20,
                 expand=True,

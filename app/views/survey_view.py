@@ -292,7 +292,7 @@ def build_survey_view(page: ft.Page, state) -> ft.View:
                         ft.TextButton("Back", style=ft.ButtonStyle(color=theme.TEXT_MUTED), on_click=on_prev),
                         theme.primary_button("Continue", icon=ft.Icons.NAVIGATE_NEXT, on_click=on_next)
                     ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
-                ], spacing=20, scroll=ft.ScrollMode.AUTO),
+                ], spacing=20, scroll=ft.ScrollMode.HIDDEN),
                 padding=20,
                 expand=True
             )

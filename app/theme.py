@@ -75,7 +75,7 @@ def build_theme() -> ft.Theme:
         divider_color=BORDER,
         appbar_theme=ft.AppBarTheme(
             bgcolor=BG_CANVAS,
-            color=TEXT_PRIMARY,
+            foreground_color=TEXT_PRIMARY,
             elevation=0,
         ),
         filled_button_theme=ft.FilledButtonTheme(
