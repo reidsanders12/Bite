@@ -55,6 +55,7 @@ app/
   config.py                         # loads .env (USDA/Supabase keys) into the environment
   theme.py                           # shared design tokens (colors, radii, fonts, shared widgets)
   promotions.py                       # icon-name -> ft.Icons map for sponsor rows (data lives in Supabase)
+  moderation.py                        # Meal Feed caption blocklist (pre-post content filter)
   views/
     auth_view.py                     # sign in / create account (name, email, password)
     survey_view.py                    # onboarding: biometrics -> BMR/TDEE -> macro targets
@@ -69,8 +70,12 @@ app/
     log_workout_view.py                       # AI-estimated workout entry (describe it, Gemini estimates burn)
     workout_history_view.py                    # full workout history, with delete
     weight_view.py                              # log weight + trend chart + history, with delete
+    pr_tracker_view.py                           # auto-computed personal records (streaks, workouts, weight)
     coach_view.py                                # AI coach chat (linked from the home screen's chat icon)
+    meal_feed_view.py                             # browse meal posts (public + your circles), reachable from home
+    post_meal_view.py                              # capture a photo, caption it, share Public or to one circle
     sponsor_requests_view.py                      # approve/reject sponsor submissions (ADMIN_EMAIL only)
+    reported_posts_view.py                          # review/dismiss/remove reported Meal Feed posts (ADMIN_EMAIL only)
     settings_view.py                                # legacy goals editor, superseded by profile_view
     widgets.py                                       # shared small UI components
 ```
@@ -135,15 +140,20 @@ The daily per-user cap (100 requests/day by default) is set in
 `supabase/functions/gemini-proxy/index.ts` (`DAILY_REQUEST_LIMIT`) — adjust
 and redeploy if you need a different limit.
 
-For Friend Circles, Workout Logging, Weight Tracking, and Sponsors, run
-[`supabase_circles_schema.sql`](supabase_circles_schema.sql) once in the
-Supabase SQL editor. It creates `circles`, `circle_members`,
-`circle_checkins`, `workout_logs`, `weight_logs`, and `sponsors`, with RLS
-policies that (unlike `food_logs`/`user_goals`) deliberately let every
-member of a circle read the other members' check-in status — that's the
-whole point of a shared accountability goal. No macro or meal data is ever
-exposed this way; check-ins are just a per-day boolean against a goal the
-circle's creator set.
+For Friend Circles, Workout Logging, Weight Tracking, Meal Posts, and
+Sponsors, run [`supabase_circles_schema.sql`](supabase_circles_schema.sql)
+once in the Supabase SQL editor (safe to re-run any time you pull an update
+that touches it — every statement is idempotent). It creates `circles`,
+`circle_members`, `circle_checkins`, `workout_logs`, `weight_logs`,
+`meal_posts`, `meal_post_likes`, and `sponsors`, plus a public
+`meal-photos` Storage bucket,
+with RLS policies that (unlike `food_logs`/`user_goals`) deliberately let
+every member of a circle read the other members' check-in status — that's
+the whole point of a shared accountability goal. No macro or meal data from
+`food_logs` is ever exposed this way; check-ins are just a per-day boolean
+against a goal the circle's creator set. Personal Records (Profile → 
+Personal Records) needs no schema at all — it's computed entirely from
+`workout_logs`, `weight_logs`, and `food_logs` rows that already exist.
 
 `workout_logs` and `weight_logs` are scoped strictly per-user like
 `food_logs` — no cross-member visibility.
@@ -182,6 +192,67 @@ file for `you@example.com` and replace both occurrences with the same
 address you set as `ADMIN_EMAIL`, then rerun the file (it's idempotent). A
 starter row ("IronWorks Gym", pre-approved) is seeded once so the home
 screen isn't empty out of the box.
+
+## App Store / Play Store compliance
+
+Meal Feed made Bite a "user-generated content" app the moment it shipped
+(public photo posts other users can see), which pulls in a specific set of
+Apple (Guideline 1.2, Safety — User Generated Content) and Google Play
+(User Generated Content policy) requirements. What's handled in code vs.
+what's still on you before submitting:
+
+**Handled in code:**
+- **Report** — every post has a Report action (`meal_post_reports`); **Block**
+  — every post has a Block-user action (`blocked_users`, filters that
+  user's posts out of your own feed). Both are anonymous to the reported/
+  blocked user — RLS only ever lets a report's reporter or the admin
+  account read it.
+- **A method for filtering objectionable material before it's posted** —
+  `app/moderation.py`'s caption blocklist. It's intentionally small (slurs
+  and explicit terms, not general profanity) — photos aren't scanned, since
+  that needs a paid image-moderation API this project doesn't have.
+- **A way to act on reports** — Profile → Reported Posts (admin-only,
+  `ADMIN_EMAIL`), lists every open report with Dismiss / Remove Post.
+- **Published contact info** — Profile → Contact Support (mailto, shown
+  once `ADMIN_EMAIL` is set).
+- **Full account deletion, including new data** — `supabase/functions/delete-account`
+  now also purges `meal_posts`, `meal_post_likes`, `meal_post_reports`,
+  `blocked_users`, and the user's `meal-photos` Storage files, not just the
+  original tables.
+- **Privacy policy** — [`privacy_policy.html`](privacy_policy.html), a static
+  page in the same style/hosting model as `sponsor_signup.html`.
+- **Google Play's account-deletion web requirement** (deletion must be
+  requestable without the app installed) — [`account_deletion.html`](account_deletion.html).
+- **iOS Info.plist** — `pyproject.toml`'s `[tool.flet.ios.info]` sets
+  specific camera/microphone usage strings (rather than flet's generic
+  defaults) and `ITSAppUsesNonExemptEncryption = false` (Bite only uses
+  standard HTTPS/TLS, so this skips the export-compliance question App
+  Store Connect would otherwise ask on every submission).
+
+**Still needs your action (can't be done from code):**
+1. **Host `privacy_policy.html` and `account_deletion.html`** — same flow as
+   `sponsor_signup.html`/`bitesponsors.netlify.app`. Fill in the
+   `[FILL IN DATE]` / `you@example.com` placeholders in both files first,
+   then set `PRIVACY_POLICY_URL` / `ACCOUNT_DELETION_URL` in `.env` so the
+   Profile links appear, and put the same URLs in App Store Connect / Play
+   Console's listing metadata (both stores require it there too, not just
+   in-app).
+2. **Re-run `supabase_circles_schema.sql`** — it now also creates
+   `blocked_users`, `meal_post_reports`, and the admin moderation RLS
+   policy on `meal_posts`.
+3. **App Store Connect**: App Privacy "nutrition label" questionnaire, Age
+   Rating questionnaire, screenshots, and your Apple Developer Team ID +
+   signing certificate/provisioning profile (`flet build ipa` currently
+   produces an unsigned `.xcarchive` — see the exportOptions.plist note
+   earlier in this README).
+4. **Google Play Console**: the Data Safety form, and a release signing
+   keystore (`--android-signing-key-store` / `[tool.flet.android.signing]`)
+   — this project has no Android SDK installed yet, so `flet build apk`
+   hasn't been exercised at all.
+5. Nothing in this app currently needs Sign in with Apple (no third-party
+   social login exists) or In-App Purchase (Sponsors is promotional cards
+   with outbound links, not a paid feature) — flag if either changes later,
+   since both come with their own hard requirements.
 
 ## Run it
 
@@ -282,6 +353,30 @@ no-ops if so.
     (a static public form); nothing they submit goes live until you approve
     it from Profile → Sponsor Requests, visible only to the `ADMIN_EMAIL`
     account. See "Sponsors: how they get submitted and approved" above.
+15. **Personal Records** — reachable from Profile → Personal Records.
+    Auto-computed bests derived from data you're already logging: best
+    food-logging and workout streaks (current + all-time-longest), longest
+    single workout, most calories burned in one workout, total workouts
+    logged, and lowest/highest logged weight. Nothing to configure or log
+    separately — it's a read-only view over `workout_logs`, `weight_logs`,
+    and `food_logs`.
+16. **Meal Feed** — reachable from the home screen's meal icon. Post a
+    photo of what you're eating (camera capture, no AI analysis — this is
+    a lightweight social share, not another logging path) with an optional
+    caption, and choose whether it's **Public** (visible to every signed-in
+    user) or shared to one of your **Friend Circles** (visible only to that
+    circle's members). You can delete your own posts; RLS enforces who can
+    see what server-side, not just the app UI. Every post can be **liked**
+    — anonymously: `meal_post_likes`' own RLS only ever lets a caller read
+    their *own* like rows, so who-liked-what can't be reconstructed by
+    anyone (not another user, not the app), even with direct database
+    access; the visible like count comes from a separate SECURITY DEFINER
+    RPC (`meal_post_like_counts`) that returns totals only. Note: the
+    underlying photo URL is served from a public Storage bucket, so a
+    circle-only post's *listing* is access-controlled but its raw image
+    URL isn't — see the comment above `upload_meal_photo()` in
+    `app/database.py` for the
+    tradeoff.
 
 ## Notes & next steps
 

@@ -19,6 +19,10 @@ from app.views.history_view import build_history_view
 from app.views.home_view import build_home_view
 from app.views.log_workout_view import build_log_workout_view
 from app.views.lookup_view import build_lookup_view
+from app.views.meal_feed_view import build_meal_feed_view
+from app.views.post_meal_view import build_post_meal_view
+from app.views.pr_tracker_view import build_pr_tracker_view
+from app.views.reported_posts_view import build_reported_posts_view
 from app.views.settings_view import build_settings_view
 from app.views.snap_view import build_snap_view
 from app.views.survey_view import build_survey_view
@@ -39,7 +43,11 @@ VIEW_BUILDERS = {
     "/log_workout": build_log_workout_view,
     "/workout_history": build_workout_history_view,
     "/weight": build_weight_view,
+    "/pr_tracker": build_pr_tracker_view,
+    "/meal_feed": build_meal_feed_view,
+    "/post_meal": build_post_meal_view,
     "/sponsor_requests": build_sponsor_requests_view,
+    "/reported_posts": build_reported_posts_view,
     "/snap": build_snap_view,
     "/confirm": build_confirm_view,
     "/history": build_history_view,
@@ -82,7 +90,7 @@ def main(page: ft.Page):
                 # but gating the route too means that's belt-and-suspenders
                 # rather than the only thing standing between a random user
                 # and the admin screen.
-                if page.route == "/sponsor_requests" and not (
+                if page.route in ("/sponsor_requests", "/reported_posts") and not (
                     hasattr(state, "is_admin") and state.is_admin()
                 ):
                     builder = build_home_view

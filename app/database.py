@@ -687,6 +687,336 @@ class Database:
             # end user, who has no use for an RLS policy name or table name).
             return False, "Something went wrong -- please try again."
 
+    # --- PERSONAL RECORDS ---
+
+    @staticmethod
+    def _compute_streaks(date_set: set) -> tuple[int, int]:
+        """Given a set of ISO date strings, returns (current_streak, best_streak).
+        Current counts backward from today (or yesterday if today has no
+        entry yet, same convention as get_log_streak); best is the longest
+        run of consecutive days anywhere in the set."""
+        if not date_set:
+            return 0, 0
+
+        parsed = sorted(date.fromisoformat(d) for d in date_set)
+        best = run = 1
+        for prev, cur in zip(parsed, parsed[1:]):
+            if (cur - prev).days == 1:
+                run += 1
+                best = max(best, run)
+            else:
+                run = 1
+
+        today = date.today()
+        cursor = today if today.isoformat() in date_set else today - timedelta(days=1)
+        current = 0
+        while cursor.isoformat() in date_set:
+            current += 1
+            cursor -= timedelta(days=1)
+
+        return current, best
+
+    def get_pr_summary(self) -> dict:
+        """Computes personal records purely from data already being tracked
+        -- workouts, food-logging streaks, and weight history. No new table
+        needed: every record here is a max/min/streak over food_logs,
+        workout_logs, and weight_logs rows the user already has."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return {}
+
+        try:
+            workouts = self.get_all_workout_logs()
+            weights = self.get_weight_history()
+
+            food_resp = (
+                self.client.table("food_logs").select("created_at").eq("user_id", uid).execute()
+            )
+            food_dates = {row["created_at"][:10] for row in (food_resp.data or [])}
+            workout_dates = {w["created_at"][:10] for w in workouts if w.get("created_at")}
+
+            food_current, food_best = self._compute_streaks(food_dates)
+            workout_current, workout_best = self._compute_streaks(workout_dates)
+
+            return {
+                "total_workouts": len(workouts),
+                "longest_workout": max(workouts, key=lambda w: w.get("duration_minutes") or 0, default=None),
+                "most_calories_workout": max(workouts, key=lambda w: w.get("calories_burned") or 0, default=None),
+                "food_streak_current": food_current,
+                "food_streak_best": food_best,
+                "workout_streak_current": workout_current,
+                "workout_streak_best": workout_best,
+                "lowest_weight": min(weights, key=lambda w: w["weight_kg"], default=None),
+                "highest_weight": max(weights, key=lambda w: w["weight_kg"], default=None),
+            }
+        except Exception as e:
+            logger.error(f"Failed to compute PR summary: {e}")
+            return {}
+
+    # --- MEAL POSTS ---
+
+    def upload_meal_photo(self, photo_bytes: bytes) -> tuple[Optional[str], str]:
+        """Uploads a JPEG photo to the meal-photos Storage bucket under this
+        user's own folder (matches the storage RLS policy, which only
+        allows writes under a path starting with the caller's own uid) and
+        returns its public URL. The bucket is public-read, so anyone
+        holding the exact URL can view the image directly -- a post's
+        *visibility* is still enforced by meal_posts' own RLS, but the raw
+        photo URL itself isn't further access-controlled once public. Kept
+        simple rather than building out signed-URL infrastructure, matching
+        how the rest of this project favors a small number of RLS-guarded
+        tables for a single-developer app."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return None, "No active user session."
+
+        path = f"{uid}/{secrets.token_hex(8)}.jpg"
+        try:
+            self.client.storage.from_("meal-photos").upload(
+                path, photo_bytes, {"content-type": "image/jpeg"}
+            )
+            url = self.client.storage.from_("meal-photos").get_public_url(path)
+            return url, ""
+        except Exception as e:
+            logger.error(f"Failed to upload meal photo: {e}")
+            return None, "Couldn't upload photo -- please try again."
+
+    def create_meal_post(
+        self, photo_url: str, caption: str, display_name: str,
+        visibility: str = "public", circle_id: Optional[int] = None,
+    ) -> tuple[bool, str]:
+        """Creates a meal post. RLS (meal_posts_insert_own) re-checks that a
+        'circle' post's circle_id is actually one the caller belongs to."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            self.client.table("meal_posts").insert({
+                "user_id": uid,
+                "display_name": display_name,
+                "photo_url": photo_url,
+                "caption": caption or None,
+                "visibility": visibility,
+                "circle_id": circle_id if visibility == "circle" else None,
+            }).execute()
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to create meal post: {e}")
+            return False, "Something went wrong -- please try again."
+
+    def get_meal_feed(self) -> List[dict]:
+        """Fetches every meal post visible to the caller -- their own
+        posts, every public post, and circle posts from circles they
+        belong to -- minus posts from anyone the caller has blocked.
+        meal_posts_select_visible RLS already restricts which rows come
+        back for *visibility*; blocking is a personal preference layered
+        on top client-side, not a security boundary, so it's filtered here
+        rather than in RLS."""
+        try:
+            blocked_ids = list(self.get_blocked_user_ids())
+            query = self.client.table("meal_posts").select("*").order("created_at", desc=True)
+            if blocked_ids:
+                query = query.not_.in_("user_id", blocked_ids)
+            response = query.execute()
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Failed to fetch meal feed: {e}")
+            return []
+
+    def delete_meal_post(self, post_id: int) -> tuple[bool, str]:
+        """Deletes a meal post. See delete_log_entry for why response.data
+        is checked instead of trusting the absence of an exception."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            response = (
+                self.client.table("meal_posts").delete().eq("id", post_id).eq("user_id", uid).execute()
+            )
+            if not response.data:
+                logger.error("Delete was blocked (0 rows affected) -- check the DELETE RLS policy on meal_posts.")
+                return False, "Couldn't delete that post -- please try again."
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to delete meal post: {e}")
+            return False, "Something went wrong -- please try again."
+
+    # --- MEAL POST LIKES ---
+
+    def get_like_counts(self, post_ids: List[int]) -> dict:
+        """Returns {post_id: like_count} for the given posts via the
+        meal_post_like_counts RPC -- see the SQL comment above that
+        function for why this never exposes who liked what, only totals."""
+        if not post_ids:
+            return {}
+
+        try:
+            response = self.client.rpc(
+                "meal_post_like_counts", {"post_ids": post_ids}
+            ).execute()
+            return {row["post_id"]: row["like_count"] for row in (response.data or [])}
+        except Exception as e:
+            logger.error(f"Failed to fetch like counts: {e}")
+            return {}
+
+    def get_my_liked_post_ids(self) -> set:
+        """Returns the post ids the caller has liked. meal_post_likes_select_own
+        RLS already restricts this to exactly the caller's own like rows."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return set()
+
+        try:
+            response = self.client.table("meal_post_likes").select("post_id").eq("user_id", uid).execute()
+            return {row["post_id"] for row in (response.data or [])}
+        except Exception as e:
+            logger.error(f"Failed to fetch my likes: {e}")
+            return set()
+
+    def like_meal_post(self, post_id: int) -> tuple[bool, str]:
+        """Likes a post (idempotent -- the unique (post_id, user_id)
+        constraint turns a duplicate insert into a harmless error, same
+        approach as check_in())."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            self.client.table("meal_post_likes").insert({"post_id": post_id, "user_id": uid}).execute()
+            return True, ""
+        except Exception as e:
+            logger.debug(f"Like not recorded (likely already liked): {e}")
+            return True, ""
+
+    def unlike_meal_post(self, post_id: int) -> tuple[bool, str]:
+        """Removes the caller's own like from a post."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            self.client.table("meal_post_likes").delete().eq("post_id", post_id).eq("user_id", uid).execute()
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to unlike post: {e}")
+            return False, "Something went wrong -- please try again."
+
+    # --- MEAL FEED MODERATION ---
+    # Required by Apple's UGC guideline (1.2) and Google Play's User
+    # Generated Content policy -- see the SQL comment above the
+    # blocked_users table for why this exists at all.
+
+    def get_blocked_user_ids(self) -> set:
+        """Returns the user ids the caller has blocked. blocked_users_select_own
+        RLS already restricts this to the caller's own block list."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return set()
+
+        try:
+            response = self.client.table("blocked_users").select("blocked_id").eq("blocker_id", uid).execute()
+            return {row["blocked_id"] for row in (response.data or [])}
+        except Exception as e:
+            logger.error(f"Failed to fetch blocked users: {e}")
+            return set()
+
+    def block_user(self, blocked_id: str) -> tuple[bool, str]:
+        """Blocks another user -- their posts stop appearing in the
+        caller's own meal feed (see get_meal_feed)."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            self.client.table("blocked_users").insert({"blocker_id": uid, "blocked_id": blocked_id}).execute()
+            return True, ""
+        except Exception as e:
+            logger.debug(f"Block not recorded (likely already blocked): {e}")
+            return True, ""
+
+    def unblock_user(self, blocked_id: str) -> tuple[bool, str]:
+        """Removes a block, so that user's posts reappear in the caller's feed."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            self.client.table("blocked_users").delete().eq("blocker_id", uid).eq("blocked_id", blocked_id).execute()
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to unblock user: {e}")
+            return False, "Something went wrong -- please try again."
+
+    def report_meal_post(self, post_id: int, reason: str) -> tuple[bool, str]:
+        """Flags a post for admin review. meal_post_reports_insert_own RLS
+        re-checks the post is one the caller can actually see."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            self.client.table("meal_post_reports").insert({
+                "post_id": post_id, "reporter_id": uid, "reason": (reason or "").strip() or None,
+            }).execute()
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to report meal post: {e}")
+            return False, "Something went wrong -- please try again."
+
+    def get_reported_posts(self) -> List[dict]:
+        """Fetches every open report joined with its post, for the admin
+        moderation screen. meal_post_reports_select_owner RLS restricts
+        this to the admin account (and each reporter's own reports, which
+        this query doesn't otherwise surface). Done as two queries instead
+        of a single embedded select -- postgrest's embedded-resource syntax
+        needs a foreign-key relationship Supabase's schema cache doesn't
+        always pick up reliably right after a fresh migration, and this
+        table is small enough that N+1 doesn't matter here."""
+        try:
+            reports = self.client.table("meal_post_reports").select("*").order("created_at", desc=True).execute()
+            rows = reports.data or []
+            if not rows:
+                return []
+
+            post_ids = list({r["post_id"] for r in rows})
+            posts = self.client.table("meal_posts").select("*").in_("id", post_ids).execute()
+            posts_by_id = {p["id"]: p for p in (posts.data or [])}
+
+            for row in rows:
+                row["post"] = posts_by_id.get(row["post_id"])
+            return rows
+        except Exception as e:
+            logger.error(f"Failed to fetch reported posts: {e}")
+            return []
+
+    def dismiss_report(self, report_id: int) -> tuple[bool, str]:
+        """Resolves a report without deleting the underlying post (e.g. a
+        report that turns out to be unfounded). Admin-only, enforced by
+        meal_post_reports_delete_admin RLS."""
+        try:
+            response = self.client.table("meal_post_reports").delete().eq("id", report_id).execute()
+            if not response.data:
+                return False, "Couldn't dismiss that report -- only the admin account can."
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to dismiss report: {e}")
+            return False, "Something went wrong -- please try again."
+
+    def admin_delete_meal_post(self, post_id: int) -> tuple[bool, str]:
+        """Removes a reported post outright. Admin-only (meal_posts_delete_admin
+        RLS) -- unlike delete_meal_post, this has no `.eq("user_id", uid)`
+        filter, since the whole point is deleting someone *else's* post."""
+        try:
+            response = self.client.table("meal_posts").delete().eq("id", post_id).execute()
+            if not response.data:
+                return False, "Couldn't delete that post -- only the admin account can."
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to admin-delete meal post: {e}")
+            return False, "Something went wrong -- please try again."
+
     # --- SPONSORS ---
 
     def get_active_sponsors(self) -> List[dict]:

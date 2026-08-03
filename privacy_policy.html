@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bite Privacy Policy</title>
+<style>
+  :root {
+    --bg-canvas: #FAF3EA;
+    --bg-surface: #FFFDF9;
+    --bg-alt: #F1E9DC;
+    --border: #E4D9C7;
+    --text-primary: #2B2622;
+    --text-muted: #75695A;
+    --accent: #C1652F;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg-canvas);
+    color: var(--text-primary);
+    display: flex;
+    justify-content: center;
+    padding: 32px 16px 64px;
+  }
+  .card {
+    width: 100%;
+    max-width: 680px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px 36px;
+    line-height: 1.55;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lead { color: var(--text-muted); font-size: 13px; margin: 0 0 28px; }
+  h2 { font-size: 15px; margin: 28px 0 8px; }
+  p, li { font-size: 14px; color: var(--text-primary); }
+  ul { margin: 8px 0; padding-left: 20px; }
+  a { color: var(--accent); }
+  .muted { color: var(--text-muted); font-size: 13px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Bite Privacy Policy</h1>
+    <p class="lead">Last updated: [FILL IN DATE] · Applies to the Bite mobile and web app.</p>
+
+    <p>
+      Bite ("we", "us") is a calorie and macro tracking app. This page explains
+      what data Bite collects, why, and how you can delete it. This is a plain
+      summary, not a substitute for legal advice -- if you're launching Bite
+      commercially at scale, have a lawyer review this before you rely on it.
+    </p>
+
+    <h2>What we collect</h2>
+    <ul>
+      <li><strong>Account info:</strong> name, email, password (handled by Supabase Auth -- we never see your raw password).</li>
+      <li><strong>Biometrics you enter during onboarding:</strong> age, gender, weight, height, activity level, and goal -- used only to calculate your calorie/macro targets.</li>
+      <li><strong>Food, workout, and weight logs</strong> you create -- meal descriptions, macros, workout descriptions, and weight entries.</li>
+      <li><strong>Photos you submit for analysis</strong> (Snap & Log) -- sent to Google Gemini for a one-time macro estimate; we don't separately store the photo itself unless you choose to post it (see below).</li>
+      <li><strong>Meal Feed posts</strong> you choose to create -- a photo and optional caption, shared either publicly (visible to any signed-in user) or to one Friend Circle you belong to (visible only to that circle's members).</li>
+      <li><strong>Friend Circle membership and check-in status</strong> -- a per-day yes/no against a goal, visible to other members of that circle. Your food logs are never exposed this way.</li>
+      <li><strong>Likes on Meal Feed posts</strong> -- recorded, but never attributed to you publicly; only the total count is ever shown to anyone, including other members of a circle.</li>
+      <li><strong>AI Coach chat messages</strong> -- kept only in memory on your device for the current session; not stored on our servers.</li>
+    </ul>
+
+    <h2>How we use it</h2>
+    <p>
+      To calculate your targets, log and display your history, generate
+      AI-estimated macro/calorie breakdowns, and power the optional social
+      features (Friend Circles, Meal Feed) you choose to use. We don't sell
+      your data, and we don't use it for advertising outside the app's own
+      sponsor promo slot (which is unrelated to your personal data -- sponsors
+      are shown at random, not targeted).
+    </p>
+
+    <h2>Who we share it with</h2>
+    <ul>
+      <li><strong>Supabase</strong> -- our database, authentication, and file storage provider.</li>
+      <li><strong>Google Gemini</strong> -- processes photos/text you submit for AI analysis (Snap & Log, Text Log, AI Coach, workout estimates). Requests go through our own server-side proxy, which never forwards your account email or password.</li>
+      <li><strong>USDA FoodData Central / Open Food Facts</strong> -- public nutrition databases we query directly for barcode/ingredient lookups; no personal data is sent to them.</li>
+    </ul>
+    <p>We don't sell or rent your personal data to anyone.</p>
+
+    <h2>Public and shared content</h2>
+    <p>
+      Meal Feed posts you mark <strong>Public</strong> are visible to any
+      signed-in Bite user. Posts you share to a <strong>Friend Circle</strong>
+      are visible only to that circle's members. You can delete any of your
+      own posts at any time. If you see something that shouldn't be there,
+      every post has a Report option, and you can Block any user to stop
+      seeing their posts.
+    </p>
+
+    <h2>Data retention and deletion</h2>
+    <p>
+      You can permanently delete your account and everything in it --
+      food logs, workout history, weight history, meal posts and photos,
+      macro goals, and circle data -- at any time from
+      <strong>Profile → Delete Account</strong>. If you'd rather not open the
+      app, see <a href="account_deletion.html">how to request deletion by
+      email</a> instead.
+    </p>
+
+    <h2>Security</h2>
+    <p>
+      Data is encrypted in transit (HTTPS/TLS). Our database uses row-level
+      security so your food logs, workout logs, and weight logs are only ever
+      readable by you -- not by other users, and not even by us through the
+      normal app interface.
+    </p>
+
+    <h2>Children</h2>
+    <p>
+      Bite is not directed at children under 13, and we don't knowingly
+      collect data from anyone under that age.
+    </p>
+
+    <h2>Changes to this policy</h2>
+    <p>We may update this page from time to time; continued use of Bite after a change means you accept the update.</p>
+
+    <h2>Contact</h2>
+    <p class="muted">Questions about this policy or your data: <a href="mailto:you@example.com">you@example.com</a> [REPLACE WITH YOUR SUPPORT EMAIL]</p>
+  </div>
+</body>
+</html>

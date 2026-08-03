@@ -4,6 +4,7 @@ Profile Account and Macro Targets View.
 import flet as ft
 
 from app import theme
+from app.config import ADMIN_EMAIL, PRIVACY_POLICY_URL
 from app.models import UserGoals
 
 LB_PER_KG = 2.20462
@@ -325,11 +326,36 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                         on_click=lambda _: page.go("/weight")
                     ),
                     ft.TextButton(
+                        "Personal Records",
+                        icon=ft.Icons.EMOJI_EVENTS_OUTLINED,
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                        on_click=lambda _: page.go("/pr_tracker")
+                    ),
+                    ft.TextButton(
                         "Sponsor Requests",
                         icon=ft.Icons.CAMPAIGN_OUTLINED,
                         style=ft.ButtonStyle(color=theme.TEXT_MUTED),
                         on_click=lambda _: page.go("/sponsor_requests")
                     ) if hasattr(state, "is_admin") and state.is_admin() else ft.Container(),
+                    ft.TextButton(
+                        "Reported Posts",
+                        icon=ft.Icons.FLAG_OUTLINED,
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                        on_click=lambda _: page.go("/reported_posts")
+                    ) if hasattr(state, "is_admin") and state.is_admin() else ft.Container(),
+                    ft.Divider(color=theme.BORDER, height=28),
+                    ft.TextButton(
+                        "Privacy Policy",
+                        icon=ft.Icons.SHIELD_OUTLINED,
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                        on_click=lambda _: page.launch_url(PRIVACY_POLICY_URL)
+                    ) if PRIVACY_POLICY_URL else ft.Container(),
+                    ft.TextButton(
+                        "Contact Support",
+                        icon=ft.Icons.MAIL_OUTLINE_ROUNDED,
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                        on_click=lambda _: page.launch_url(f"mailto:{ADMIN_EMAIL}")
+                    ) if ADMIN_EMAIL else ft.Container(),
                     ft.Divider(color=theme.BORDER, height=28),
                     ft.TextButton(
                         "Log Out",

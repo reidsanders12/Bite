@@ -24,6 +24,20 @@ permissions = ["camera", "microphone"]
 color = "#FAF3EA"
 dark_color = "#FAF3EA"
 
+# `[tool.flet.ios.info]` values override the generic default usage strings
+# the `permissions` list above generates (e.g. "This app uses the camera to
+# capture photos and videos.") -- App Review is more likely to sail through
+# with a string that says what the camera/mic are actually *for*, not just
+# that the app uses them.
+#
+# ITSAppUsesNonExemptEncryption=false: Bite only uses standard HTTPS/TLS
+# (exempt encryption), so this skips the export-compliance question App
+# Store Connect would otherwise ask on every single submission.
+[tool.flet.ios.info]
+NSCameraUsageDescription = "Bite uses your camera to snap photos of meals for AI calorie/macro estimates and to share photos to Meal Feed."
+NSMicrophoneUsageDescription = "Bite uses your microphone to record a voice note that's transcribed into a food log entry."
+ITSAppUsesNonExemptEncryption = false
+
 # flet 0.28.3's Flutter build template overrides `record` to ^5.1.1 (needed
 # by flet_audio_recorder), but the pub resolver still freely picks the
 # newest record_linux (0.7.2), which predates record_platform_interface's

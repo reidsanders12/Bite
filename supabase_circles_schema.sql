@@ -348,3 +348,223 @@ create policy "circle_checkins_insert_self" on circle_checkins
         user_id = auth.uid()
         and circle_id in (select my_circle_ids())
     );
+
+-- Meal Posts: a lightweight photo-sharing feed, separate from food_logs.
+-- Posting is a deliberate share, not a side effect of AI logging -- there's
+-- no macro data here, just a photo + optional caption. Each post is either
+-- 'public' (any signed-in user can see it) or 'circle' (only members of the
+-- one circle_id it's posted to, via my_circle_ids() -- see above). Deleting
+-- a circle cascades to its circle-only posts.
+create table if not exists meal_posts (
+    id bigint generated always as identity primary key,
+    user_id uuid not null references auth.users(id),
+    display_name text not null,
+    photo_url text not null,
+    caption text,
+    visibility text not null default 'public', -- 'public' or 'circle'
+    circle_id bigint references circles(id) on delete cascade,
+    created_at timestamptz not null default now()
+);
+
+alter table meal_posts enable row level security;
+
+drop policy if exists "meal_posts_select_visible" on meal_posts;
+create policy "meal_posts_select_visible" on meal_posts
+    for select to authenticated using (
+        visibility = 'public'
+        or user_id = auth.uid()
+        or (visibility = 'circle' and circle_id in (select my_circle_ids()))
+    );
+
+drop policy if exists "meal_posts_insert_own" on meal_posts;
+create policy "meal_posts_insert_own" on meal_posts
+    for insert to authenticated with check (
+        user_id = auth.uid()
+        and (
+            visibility = 'public'
+            or (visibility = 'circle' and circle_id in (select my_circle_ids()))
+        )
+    );
+
+drop policy if exists "meal_posts_delete_own" on meal_posts;
+create policy "meal_posts_delete_own" on meal_posts
+    for delete to authenticated using (user_id = auth.uid());
+
+-- Meal Post Likes: anonymous by construction, not just by hiding it in the
+-- UI. The select policy below only ever lets a caller see their *own* like
+-- rows (to know whether to render a filled/outline heart) -- there is no
+-- policy letting anyone read anyone else's like rows, so who-liked-what
+-- can't be reconstructed even with direct table access. Aggregate counts
+-- are exposed separately via meal_post_like_counts(), a SECURITY DEFINER
+-- RPC that returns totals only (same pattern as my_circle_ids() above).
+create table if not exists meal_post_likes (
+    id bigint generated always as identity primary key,
+    post_id bigint not null references meal_posts(id) on delete cascade,
+    user_id uuid not null references auth.users(id),
+    created_at timestamptz not null default now(),
+    unique (post_id, user_id)
+);
+
+alter table meal_post_likes enable row level security;
+
+drop policy if exists "meal_post_likes_select_own" on meal_post_likes;
+create policy "meal_post_likes_select_own" on meal_post_likes
+    for select to authenticated using (user_id = auth.uid());
+
+-- Can only like a post you're actually allowed to see -- mirrors
+-- meal_posts_select_visible's own visibility rule exactly, so liking can't
+-- be used to probe the existence of a circle-only post you're not a
+-- member of.
+drop policy if exists "meal_post_likes_insert_own" on meal_post_likes;
+create policy "meal_post_likes_insert_own" on meal_post_likes
+    for insert to authenticated with check (
+        user_id = auth.uid()
+        and exists (
+            select 1 from meal_posts mp
+            where mp.id = meal_post_likes.post_id
+            and (
+                mp.visibility = 'public'
+                or mp.user_id = auth.uid()
+                or (mp.visibility = 'circle' and mp.circle_id in (select my_circle_ids()))
+            )
+        )
+    );
+
+drop policy if exists "meal_post_likes_delete_own" on meal_post_likes;
+create policy "meal_post_likes_delete_own" on meal_post_likes
+    for delete to authenticated using (user_id = auth.uid());
+
+-- Returns {post_id, like_count} for a batch of posts in one round trip.
+-- SECURITY DEFINER means it bypasses meal_post_likes' own RLS to compute
+-- the count -- but it only ever returns a count, never a user_id, so this
+-- doesn't reopen the "who liked what" visibility that policy deliberately
+-- withholds.
+create or replace function meal_post_like_counts(post_ids bigint[])
+returns table(post_id bigint, like_count bigint)
+language sql
+security definer
+stable
+set search_path = public
+as $$
+    select mpl.post_id, count(*) as like_count
+    from meal_post_likes mpl
+    where mpl.post_id = any(post_ids)
+    group by mpl.post_id
+$$;
+
+-- Storage: a public-read bucket for meal photos. Public means anyone
+-- holding the exact file URL can view it directly -- visibility of a *post*
+-- (public vs. circle-only) is enforced by meal_posts' RLS above, but the
+-- underlying photo URL itself isn't further access-controlled once
+-- uploaded. That's a deliberate simplification (no signed-URL plumbing)
+-- consistent with this project's single-developer scope; worth revisiting
+-- if circle-only privacy ever needs to be airtight.
+insert into storage.buckets (id, name, public)
+values ('meal-photos', 'meal-photos', true)
+on conflict (id) do nothing;
+
+-- Uploads/deletes are restricted to a path starting with the caller's own
+-- uid (app/database.py's upload_meal_photo() writes to `{uid}/{filename}`)
+-- -- storage.foldername() splits the object path into its folder segments,
+-- so [1] is that leading uid segment.
+drop policy if exists "meal_photos_insert_own" on storage.objects;
+create policy "meal_photos_insert_own" on storage.objects
+    for insert to authenticated
+    with check (bucket_id = 'meal-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "meal_photos_delete_own" on storage.objects;
+create policy "meal_photos_delete_own" on storage.objects
+    for delete to authenticated
+    using (bucket_id = 'meal-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Moderation: required by Apple App Store Review Guideline 1.2 (Safety --
+-- User Generated Content) and Google Play's User Generated Content policy,
+-- both of which apply once an app has a feed of user-posted photos/text
+-- visible to other users, as Meal Feed now is. Both require: a way to
+-- report content, a way to block abusive users, and a way for you (the
+-- developer) to act on reports -- this section plus the admin-only
+-- moderation screen (app/views/reported_posts_view.py) are that.
+
+-- Blocked Users: blocking is a personal preference, not a security
+-- boundary -- app/database.py's get_meal_feed() filters out posts from
+-- anyone the caller has blocked. Only the blocker can ever see their own
+-- block list (mirrors meal_post_likes' anonymity approach).
+create table if not exists blocked_users (
+    blocker_id uuid not null references auth.users(id),
+    blocked_id uuid not null references auth.users(id),
+    created_at timestamptz not null default now(),
+    primary key (blocker_id, blocked_id)
+);
+
+alter table blocked_users enable row level security;
+
+drop policy if exists "blocked_users_select_own" on blocked_users;
+create policy "blocked_users_select_own" on blocked_users
+    for select to authenticated using (blocker_id = auth.uid());
+
+drop policy if exists "blocked_users_insert_own" on blocked_users;
+create policy "blocked_users_insert_own" on blocked_users
+    for insert to authenticated with check (blocker_id = auth.uid());
+
+drop policy if exists "blocked_users_delete_own" on blocked_users;
+create policy "blocked_users_delete_own" on blocked_users
+    for delete to authenticated using (blocker_id = auth.uid());
+
+-- Meal Post Reports: flags a post for your review. Only the reporter and
+-- the admin account (via the same profiles.is_admin flag sponsors_select_owner
+-- uses) can ever read a report row -- an accused poster never sees who
+-- reported them or why.
+create table if not exists meal_post_reports (
+    id bigint generated always as identity primary key,
+    post_id bigint not null references meal_posts(id) on delete cascade,
+    reporter_id uuid not null references auth.users(id),
+    reason text,
+    created_at timestamptz not null default now()
+);
+
+alter table meal_post_reports enable row level security;
+
+drop policy if exists "meal_post_reports_select_owner" on meal_post_reports;
+create policy "meal_post_reports_select_owner" on meal_post_reports
+    for select to authenticated using (
+        reporter_id = auth.uid()
+        or exists (select 1 from profiles where id = auth.uid() and is_admin)
+    );
+
+-- Can only report a post you're actually allowed to see -- same visibility
+-- rule as meal_post_likes_insert_own, for the same reason (reporting can't
+-- be used to probe the existence of a circle-only post you're not in).
+drop policy if exists "meal_post_reports_insert_own" on meal_post_reports;
+create policy "meal_post_reports_insert_own" on meal_post_reports
+    for insert to authenticated with check (
+        reporter_id = auth.uid()
+        and exists (
+            select 1 from meal_posts mp
+            where mp.id = meal_post_reports.post_id
+            and (
+                mp.visibility = 'public'
+                or mp.user_id = auth.uid()
+                or (mp.visibility = 'circle' and mp.circle_id in (select my_circle_ids()))
+            )
+        )
+    );
+
+-- Admin can dismiss (delete) a report once reviewed -- resolving it without
+-- necessarily deleting the underlying post (e.g. a report that turns out to
+-- be unfounded).
+drop policy if exists "meal_post_reports_delete_admin" on meal_post_reports;
+create policy "meal_post_reports_delete_admin" on meal_post_reports
+    for delete to authenticated using (
+        exists (select 1 from profiles where id = auth.uid() and is_admin)
+    );
+
+-- Second, additive DELETE policy on meal_posts (Postgres ORs multiple
+-- permissive policies for the same command together) -- lets the admin
+-- remove a reported post, not just its owner. This is what makes
+-- "a mechanism to report offensive content" actually actionable instead of
+-- reports just piling up unread.
+drop policy if exists "meal_posts_delete_admin" on meal_posts;
+create policy "meal_posts_delete_admin" on meal_posts
+    for delete to authenticated using (
+        exists (select 1 from profiles where id = auth.uid() and is_admin)
+    );

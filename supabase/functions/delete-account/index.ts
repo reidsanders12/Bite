@@ -59,6 +59,18 @@ Deno.serve(async (req) => {
   // has on delete cascade), i.e. the circle disappears for every member,
   // same as the existing manual "delete circle" flow already does.
   const cleanupSteps: Array<{ table: string; column: string }> = [
+    // meal_post_likes/meal_post_reports the user placed on *other* people's
+    // posts first -- those rows aren't touched by the meal_posts cleanup
+    // below, since that only cascades away likes/reports on posts *this*
+    // user authored, not ones they merely liked/reported.
+    { table: "meal_post_likes", column: "user_id" },
+    { table: "meal_post_reports", column: "reporter_id" },
+    { table: "blocked_users", column: "blocker_id" },
+    { table: "blocked_users", column: "blocked_id" },
+    // Cascades away any remaining meal_post_likes/meal_post_reports rows
+    // *other* users placed on this user's own posts (both FKs are
+    // `on delete cascade` -- see supabase_circles_schema.sql).
+    { table: "meal_posts", column: "user_id" },
     { table: "circle_checkins", column: "user_id" },
     { table: "circle_members", column: "user_id" },
     { table: "circles", column: "created_by" },
@@ -73,6 +85,25 @@ Deno.serve(async (req) => {
     if (error) {
       console.error(`[delete-account] cleanup failed on ${step.table}:`, error);
       return jsonResponse({ error: `Couldn't delete account data (${step.table}). Please try again.` }, 500);
+    }
+  }
+
+  // meal-photos Storage objects live under `{userId}/...` (see
+  // app/database.py's upload_meal_photo) and aren't covered by any SQL
+  // delete above -- Storage is a separate system from the meal_posts
+  // table's rows. Deleting the row without deleting the file would leave
+  // the photo (still publicly readable by URL) orphaned in the bucket
+  // forever, which both defeats the point of deleting the account and
+  // fails "delete all associated data" (Apple Guideline 5.1.1(v)).
+  const { data: photoFiles, error: listErr } = await admin.storage.from("meal-photos").list(userId);
+  if (listErr) {
+    console.error("[delete-account] failed to list meal-photos:", listErr);
+  } else if (photoFiles && photoFiles.length > 0) {
+    const paths = photoFiles.map((f) => `${userId}/${f.name}`);
+    const { error: removeErr } = await admin.storage.from("meal-photos").remove(paths);
+    if (removeErr) {
+      console.error("[delete-account] failed to remove meal-photos:", removeErr);
+      return jsonResponse({ error: "Couldn't delete account photos. Please try again." }, 500);
     }
   }
 

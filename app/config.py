@@ -25,6 +25,17 @@ SUPABASE_URL = SUPABASE_URL.strip()
 SUPABASE_ANON_KEY = SUPABASE_ANON_KEY.strip()
 
 # 5. Optional: the email address that unlocks the in-app "Sponsor Requests"
-# review screen (Profile -> Sponsor Requests). Left blank, that screen stays
-# hidden for everyone -- this isn't a hard requirement like the keys above.
+# and "Reported Posts" review screens (Profile -> ...). Left blank, those
+# screens stay hidden for everyone -- this isn't a hard requirement like the
+# keys above.
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
+
+# Optional: URLs for the hosted privacy_policy.html / account_deletion.html
+# (repo root -- static pages, same "host it yourself" pattern as
+# sponsor_signup.html, see the README). Profile only shows these links once
+# set -- an unset URL hides the button rather than opening a dead link. Both
+# are required by Apple/Google Play policy once an app collects account data
+# and (for account_deletion.html specifically) lets users create accounts --
+# see README's "App Store / Play Store compliance" section.
+PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip()
+ACCOUNT_DELETION_URL = os.getenv("ACCOUNT_DELETION_URL", "").strip()

@@ -9,6 +9,7 @@ from typing import Any, Optional
 from app.config import ADMIN_EMAIL
 from app.database import Database
 from app.models import Circle, LogStreak, UserGoals
+from app import moderation
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,10 @@ class AppState:
         self.weight_history: list = []  # full weight history, oldest first -- weight screen
         self.sponsors: list = []  # active sponsor rows -- home screen promo slot
         self.sponsor_requests: list = []  # every sponsor row, any status -- admin review screen
+        self.meal_feed: list = []  # posts visible to the caller -- meal feed screen
+        self.meal_post_like_counts: dict = {}  # post_id -> like count -- meal feed screen
+        self.my_liked_post_ids: set = set()  # post ids the caller has liked -- meal feed screen
+        self.reported_posts: list = []  # open reports joined with their post -- admin moderation screen
 
         # In-memory only: the coach conversation isn't persisted to Supabase,
         # so it resets on app restart (no chat table exists yet).
@@ -397,6 +402,138 @@ class AppState:
         if force_refresh or circle_id not in self.circle_status_cache:
             self.circle_status_cache[circle_id] = self.db.get_circle_status(circle_id)
         return self.circle_status_cache[circle_id]
+
+    def get_pr_summary(self) -> dict:
+        """Computes and returns personal records across workouts,
+        food-logging streaks, and weight -- recomputed fresh on each call
+        (a read-only screen with no other consumer, so there's nothing to
+        gain from caching it in a state field)."""
+        try:
+            return self.db.get_pr_summary()
+        except Exception as err:
+            logger.error("PR summary sync failed: %s", err)
+            return {}
+
+    def refresh_meal_feed(self) -> None:
+        """Pulls every meal post visible to the caller (own + public +
+        circle posts), plus anonymous like counts and which of those posts
+        the caller has liked."""
+        try:
+            self.meal_feed = self.db.get_meal_feed()
+            post_ids = [p.get("id") for p in self.meal_feed if p.get("id") is not None]
+            self.meal_post_like_counts = self.db.get_like_counts(post_ids)
+            self.my_liked_post_ids = self.db.get_my_liked_post_ids()
+        except Exception as err:
+            logger.error("Meal feed sync failed: %s", err)
+            self.meal_feed = []
+            self.meal_post_like_counts = {}
+            self.my_liked_post_ids = set()
+
+    def get_meal_feed(self) -> list:
+        """Returns the cached meal feed."""
+        return self.meal_feed
+
+    def get_like_count(self, post_id) -> int:
+        """Returns the cached like count for a post."""
+        return self.meal_post_like_counts.get(post_id, 0)
+
+    def has_liked(self, post_id) -> bool:
+        """True if the caller has liked this post."""
+        return post_id in self.my_liked_post_ids
+
+    def toggle_meal_post_like(self, post_id) -> tuple[bool, str]:
+        """Likes or unlikes a post and updates the local cache once the
+        round trip succeeds (not optimistically before)."""
+        if post_id in self.my_liked_post_ids:
+            success, err = self.db.unlike_meal_post(post_id)
+            if success:
+                self.my_liked_post_ids.discard(post_id)
+                self.meal_post_like_counts[post_id] = max(0, self.meal_post_like_counts.get(post_id, 1) - 1)
+            return success, err
+
+        success, err = self.db.like_meal_post(post_id)
+        if success:
+            self.my_liked_post_ids.add(post_id)
+            self.meal_post_like_counts[post_id] = self.meal_post_like_counts.get(post_id, 0) + 1
+        return success, err
+
+    def block_user(self, blocked_id: str) -> tuple[bool, str]:
+        """Blocks a user and refreshes the feed so their posts disappear immediately."""
+        success, err = self.db.block_user(blocked_id)
+        if success:
+            self.refresh_meal_feed()
+        return success, err
+
+    def report_meal_post(self, post_id: int, reason: str) -> tuple[bool, str]:
+        """Flags a post for admin review. Doesn't remove it from the
+        reporter's own feed -- that's what Block is for."""
+        return self.db.report_meal_post(post_id, reason)
+
+    def refresh_reported_posts(self) -> None:
+        """Pulls every open report for the admin moderation screen."""
+        try:
+            self.reported_posts = self.db.get_reported_posts()
+        except Exception as err:
+            logger.error("Reported posts sync failed: %s", err)
+            self.reported_posts = []
+
+    def get_reported_posts(self) -> list:
+        """Returns the cached list of open reports."""
+        return self.reported_posts
+
+    def dismiss_report(self, report_id: int) -> tuple[bool, str]:
+        """Resolves a report without deleting the post (admin-only, enforced by RLS)."""
+        if not self.is_admin():
+            return False, "Only the admin account can moderate reports."
+        success, err = self.db.dismiss_report(report_id)
+        if success:
+            self.refresh_reported_posts()
+        return success, err
+
+    def admin_remove_meal_post(self, post_id: int) -> tuple[bool, str]:
+        """Deletes a reported post outright (admin-only, enforced by RLS)
+        and refreshes both the moderation queue and the feed cache."""
+        if not self.is_admin():
+            return False, "Only the admin account can moderate posts."
+        success, err = self.db.admin_delete_meal_post(post_id)
+        if success:
+            self.refresh_reported_posts()
+            self.meal_feed = [
+                p for p in self.meal_feed
+                if (p.get("id") if isinstance(p, dict) else getattr(p, "id", None)) != post_id
+            ]
+        return success, err
+
+    def post_meal(
+        self, photo_bytes: bytes, caption: str, visibility: str = "public", circle_id: Optional[int] = None,
+    ) -> tuple[bool, str]:
+        """Uploads a meal photo and creates the post, then refreshes the feed cache."""
+        if not moderation.is_caption_allowed(caption):
+            return False, "Your caption isn't allowed -- please revise it."
+
+        photo_url, err = self.db.upload_meal_photo(photo_bytes)
+        if not photo_url:
+            return False, err
+        success, err = self.db.create_meal_post(
+            photo_url, caption, self.current_user_name or "Bite User", visibility, circle_id,
+        )
+        if success:
+            self.refresh_meal_feed()
+        return success, err
+
+    def remove_meal_post(self, post_id) -> tuple[bool, str]:
+        """Deletes a meal post from the cloud database and the local cache."""
+        success, err = self.db.delete_meal_post(post_id)
+        if not success:
+            return False, err
+
+        self.meal_feed = [
+            p for p in self.meal_feed
+            if (p.get("id") if isinstance(p, dict) else getattr(p, "id", None)) != post_id
+        ]
+        self.meal_post_like_counts.pop(post_id, None)
+        self.my_liked_post_ids.discard(post_id)
+        return True, ""
 
     def set_pending(self, breakdown: Any, source: str) -> None:
         """Stages an unconfirmed macro breakdown for the Confirm view."""

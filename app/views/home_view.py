@@ -404,6 +404,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 leading=ft.IconButton(icon=ft.Icons.ACCOUNT_CIRCLE_OUTLINED, icon_color=theme.TEXT_MUTED, on_click=lambda _: page.go("/profile")),
                 actions=[
                     ft.IconButton(icon=ft.Icons.CHAT_BUBBLE_OUTLINE_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="AI Coach", on_click=lambda _: page.go("/coach")),
+                    ft.IconButton(icon=ft.Icons.RESTAURANT_MENU_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="Meal Feed", on_click=lambda _: page.go("/meal_feed")),
                     ft.IconButton(icon=ft.Icons.GROUPS_OUTLINED, icon_color=theme.TEXT_MUTED, tooltip="Friend Circles", on_click=lambda _: page.go("/circles")),
                     ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="History", on_click=lambda _: page.go("/history")),
                 ],
