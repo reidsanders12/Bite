@@ -30,6 +30,9 @@ def _saved_weight_kg(state) -> float:
 
 
 def build_log_workout_view(page: ft.Page, state) -> ft.View:
+    if hasattr(state, "refresh_sponsor_workout_items"):
+        state.refresh_sponsor_workout_items()
+
     description_field = ft.TextField(
         label="Describe your workout",
         hint_text='e.g. "45 min upper body lifting" or "Ran 5k in 30 minutes"',
@@ -93,6 +96,59 @@ def build_log_workout_view(page: ft.Page, state) -> ft.View:
 
     estimate_button.on_click = on_estimate
 
+    def use_suggested_class(item: dict):
+        # Same "pre-fill, then you review and save" pattern as the AI
+        # estimate above -- a sponsored class isn't auto-logged sight
+        # unseen, it just saves typing the numbers in yourself.
+        name_field.value = item.get("name", "")
+        duration_field.value = str(item.get("duration_minutes") or 0)
+        calories_field.value = str(item.get("calories_burned") or 0)
+        review_section.visible = True
+        page.update()
+
+    def build_suggested_classes() -> ft.Control:
+        items = state.get_sponsor_workout_items() if hasattr(state, "get_sponsor_workout_items") else []
+        if not items:
+            return ft.Container()
+        cards = []
+        for item in items:
+            sponsor_name = (item.get("sponsors") or {}).get("title", "Sponsor")
+            cards.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Text(sponsor_name.upper(), size=10, weight="bold", color=theme.TEXT_FAINT),
+                                    ft.Text(item.get("name", ""), size=14, weight="w600", color=theme.TEXT_PRIMARY),
+                                    ft.Text(
+                                        f"{item.get('duration_minutes') or 0} min • {item.get('calories_burned') or 0} kcal",
+                                        size=12, color=theme.TEXT_MUTED,
+                                    ),
+                                ],
+                                expand=True, spacing=2,
+                            ),
+                            ft.IconButton(
+                                icon=ft.Icons.ADD_LINK_ROUNDED, icon_color=theme.ACCENT,
+                                tooltip="Use this class",
+                                on_click=lambda e, i=item: use_suggested_class(i),
+                            ),
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                    padding=14, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE,
+                    border=ft.border.all(1, theme.BORDER),
+                )
+            )
+        return ft.Column(
+            [
+                ft.Text("SUGGESTED CLASSES", size=11, color=theme.TEXT_FAINT, weight="w700"),
+                ft.Column(cards, spacing=8),
+                ft.Divider(color=theme.BORDER, height=1),
+            ],
+            spacing=10,
+        )
+
     def save_workout(e):
         name = (name_field.value or "").strip()
         if not name:
@@ -135,6 +191,7 @@ def build_log_workout_view(page: ft.Page, state) -> ft.View:
             ft.Container(
                 content=ft.Column(
                     [
+                        build_suggested_classes(),
                         description_field,
                         estimate_button,
                         status_area,

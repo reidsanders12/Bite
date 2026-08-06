@@ -65,6 +65,8 @@
   #status { margin-top: 14px; font-size: 13px; }
   #status.error { color: var(--error); }
   #status.success { color: var(--success); }
+  .level-desc { font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.5; }
+  .level-desc strong { color: var(--text-primary); }
 </style>
 </head>
 <body>
@@ -76,6 +78,18 @@
     </p>
 
     <form id="sponsor-form">
+      <label for="level">Sponsorship level</label>
+      <select id="level">
+        <option value="bronze">Bronze</option>
+        <option value="silver">Silver</option>
+        <option value="gold">Gold</option>
+        <option value="category_exclusive">Category Exclusive</option>
+      </select>
+      <div id="level-desc" class="level-desc"></div>
+
+      <label for="category" id="category-label">Business category</label>
+      <input id="category" maxlength="60" placeholder="e.g. Gym, QSR, Yoga studio">
+
       <label for="title">Business / promo name</label>
       <input id="title" required maxlength="80" placeholder="e.g. IronWorks Gym">
 
@@ -121,6 +135,29 @@
     const form = document.getElementById("sponsor-form");
     const statusEl = document.getElementById("status");
     const submitBtn = document.getElementById("submit-btn");
+    const levelSelect = document.getElementById("level");
+    const levelDescEl = document.getElementById("level-desc");
+    const categoryInput = document.getElementById("category");
+    const categoryLabel = document.getElementById("category-label");
+
+    const LEVEL_DESCRIPTIONS = {
+      bronze: "<strong>Bronze:</strong> Standard promo card, shown in rotation with other sponsors.",
+      silver: "<strong>Silver:</strong> Everything in Bronze, plus priority placement -- shown more often in the rotation.",
+      gold: "<strong>Gold:</strong> Everything in Silver, plus native integration -- e.g. your menu items appear as one-tap log options, or your classes show up as suggested workouts.",
+      category_exclusive: "<strong>Category Exclusive:</strong> The only sponsor in your category (only 1 gym, only 1 QSR chain, etc.) shown to users -- requires a category below.",
+    };
+
+    function updateLevelUI() {
+      const level = levelSelect.value;
+      levelDescEl.innerHTML = LEVEL_DESCRIPTIONS[level] || "";
+      const exclusive = level === "category_exclusive";
+      categoryInput.required = exclusive;
+      categoryLabel.textContent = exclusive
+        ? "Business category (required -- exclusivity is enforced per category)"
+        : "Business category (optional)";
+    }
+    levelSelect.addEventListener("change", updateLevelUI);
+    updateLevelUI();
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -131,6 +168,8 @@
 
       const payload = {
         sponsor_label: "Sponsored",
+        level: levelSelect.value,
+        category: categoryInput.value.trim() || null,
         title: document.getElementById("title").value.trim(),
         subtitle: document.getElementById("subtitle").value.trim(),
         cta_text: document.getElementById("cta_text").value.trim() || "Learn More",

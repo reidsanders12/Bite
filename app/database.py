@@ -784,9 +784,14 @@ class Database:
     def create_meal_post(
         self, photo_url: str, caption: str, display_name: str,
         visibility: str = "public", circle_id: Optional[int] = None,
+        calories: Optional[int] = None, protein: Optional[int] = None,
+        carbs: Optional[int] = None, fat: Optional[int] = None,
+        meal_name: Optional[str] = None, ingredients: Optional[str] = None,
     ) -> tuple[bool, str]:
         """Creates a meal post. RLS (meal_posts_insert_own) re-checks that a
-        'circle' post's circle_id is actually one the caller belongs to."""
+        'circle' post's circle_id is actually one the caller belongs to.
+        Macro, meal_name, and ingredients fields are all optional -- a post
+        can be photo-only."""
         uid = self.get_current_user_id()
         if not uid:
             return False, "No active user session."
@@ -796,9 +801,15 @@ class Database:
                 "user_id": uid,
                 "display_name": display_name,
                 "photo_url": photo_url,
+                "meal_name": meal_name or None,
+                "ingredients": ingredients or None,
                 "caption": caption or None,
                 "visibility": visibility,
                 "circle_id": circle_id if visibility == "circle" else None,
+                "calories": calories,
+                "protein": protein,
+                "carbs": carbs,
+                "fat": fat,
             }).execute()
             return True, ""
         except Exception as e:
@@ -1069,7 +1080,83 @@ class Database:
             return True, ""
         except Exception as e:
             logger.error(f"Failed to update sponsor status: {e}")
-            # Generic message for the UI -- the real exception is already
-            # printed above (Supabase/Postgres internals shouldn't reach the
-            # end user, who has no use for an RLS policy name or table name).
+            # sponsors_category_exclusive_unique (supabase_circles_schema.sql)
+            # rejects activating a second category_exclusive sponsor in the
+            # same category -- surface that specific reason instead of the
+            # generic fallback, since it's an expected/actionable case (turn
+            # off the current exclusive partner in that category first),
+            # not a bug. Everything else stays generic -- Postgres/Supabase
+            # internals shouldn't reach the end user otherwise.
+            if "sponsors_category_exclusive_unique" in str(e):
+                return False, (
+                    "Another sponsor is already the Category Exclusive partner for that "
+                    "category. Turn theirs off first, or reject/deactivate this one."
+                )
+            return False, "Something went wrong -- please try again."
+
+    # --- SPONSOR MENU ITEMS (Gold-tier native integration) ---
+
+    def get_gold_sponsor_menu_items(self, item_type: str) -> List[dict]:
+        """Fetches active menu items belonging to approved+active Gold
+        sponsors, for surfacing as one-tap log options ('meal', in
+        lookup_view.py) or suggested workouts ('workout', in
+        log_workout_view.py). RLS (sponsor_menu_items_select_gold_active)
+        is what actually restricts this to Gold-tier sponsors -- the
+        .eq("item_type", ...) here is just so the caller doesn't have to
+        filter client-side."""
+        try:
+            response = (
+                self.client.table("sponsor_menu_items")
+                .select("*, sponsors(title, icon_name)")
+                .eq("item_type", item_type)
+                .order("sort_order", desc=False)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Failed to fetch sponsor menu items: {e}")
+            return []
+
+    def get_sponsor_menu_items_for_admin(self, sponsor_id: int) -> List[dict]:
+        """Fetches every menu item (active or not) for one sponsor, for the
+        admin's Manage Menu dialog. Only returns anything if the caller's
+        email matches sponsor_menu_items_all_owner -- everyone else gets an
+        empty list back (silently, not an error)."""
+        try:
+            response = (
+                self.client.table("sponsor_menu_items")
+                .select("*")
+                .eq("sponsor_id", sponsor_id)
+                .order("sort_order", desc=False)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Failed to fetch sponsor menu items for admin: {e}")
+            return []
+
+    def add_sponsor_menu_item(self, sponsor_id: int, item_type: str, name: str, **fields) -> tuple[bool, str]:
+        """Adds one menu item to a sponsor. `fields` is whichever subset of
+        calories/protein/carbs/fat (item_type='meal') or
+        duration_minutes/calories_burned (item_type='workout') the admin
+        filled in -- restricted to the owner by
+        sponsor_menu_items_all_owner."""
+        try:
+            row = {"sponsor_id": sponsor_id, "item_type": item_type, "name": name, **fields}
+            response = self.client.table("sponsor_menu_items").insert(row).execute()
+            if not response.data:
+                return False, "Add was blocked -- only the configured admin account can manage sponsor menus."
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to add sponsor menu item: {e}")
+            return False, "Something went wrong -- please try again."
+
+    def delete_sponsor_menu_item(self, item_id: int) -> tuple[bool, str]:
+        """Removes a menu item. Restricted to the owner by
+        sponsor_menu_items_all_owner."""
+        try:
+            self.client.table("sponsor_menu_items").delete().eq("id", item_id).execute()
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to delete sponsor menu item: {e}")
             return False, "Something went wrong -- please try again."

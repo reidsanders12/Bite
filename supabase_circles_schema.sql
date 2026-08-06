@@ -173,6 +173,41 @@ alter table sponsors add column if not exists contact_email text;
 alter table sponsors add column if not exists website_url text;
 alter table sponsors alter column active set default false;
 
+-- Sponsorship tier. Purely a label + display weight at the 'bronze'/'silver'
+-- end (see home_view.py's weighted pick) -- 'gold' additionally implies a
+-- native-integration promise (e.g. the sponsor's menu items appear as
+-- one-tap log options, or a gym's classes show up as suggested workouts)
+-- that isn't built by this migration; that's a separate feature to spec
+-- once a gold sponsor actually needs it. Enforced app-side (not a DB check
+-- constraint) same as `status` above -- kept simple for a single-developer
+-- project.
+alter table sponsors add column if not exists level text not null default 'bronze';
+alter table sponsors drop constraint if exists sponsors_level_check;
+alter table sponsors add constraint sponsors_level_check
+    check (level in ('bronze', 'silver', 'gold', 'category_exclusive'));
+
+-- Free-text business category (e.g. 'gym', 'QSR', 'yoga studio') -- only
+-- meaningful (and required app-side) when level = 'category_exclusive';
+-- null/ignored otherwise. Matching is case/whitespace-normalized via the
+-- unique index below so "Gym" and "gym " collide as the same category.
+alter table sponsors add column if not exists category text;
+
+-- Enforces "only one category-exclusive sponsor per category" at the
+-- database level so two concurrent approvals can never both slip through --
+-- an app-side-only check has a race window between read and write, this
+-- doesn't. Scoped to approved + active rows only, so a pending/rejected/
+-- paused row never blocks a new signup or a swap to a different exclusive
+-- partner in the same category.
+--
+-- NOTE: this is app-wide, not per-region -- Bite doesn't collect any
+-- per-user location data today, so "only shown to users in their area"
+-- can't be enforced by area yet. Revisit if/when the app gains location
+-- data; until then, category-exclusive means exclusive across the whole
+-- app, which is a strict superset of "exclusive in your area."
+drop index if exists sponsors_category_exclusive_unique;
+create unique index sponsors_category_exclusive_unique on sponsors (lower(trim(category)))
+    where level = 'category_exclusive' and status = 'approved' and active = true;
+
 -- Seeds one example row, pre-approved, so the home screen isn't empty out
 -- of the box. Only runs if the table is empty, so re-running this file
 -- won't duplicate it or resurrect a row you've since deleted in the
@@ -180,6 +215,63 @@ alter table sponsors alter column active set default false;
 insert into sponsors (sponsor_label, title, subtitle, cta_text, icon_name, website_url, status, active)
 select 'Sponsored', 'IronWorks Gym', 'New members get 20% off your first 3 months.', 'Learn More', 'fitness_center', 'https://example.com', 'approved', true
 where not exists (select 1 from sponsors);
+
+-- Sponsor Menu Items: the Gold-tier "native integration" promise --
+-- a restaurant's menu items appear as one-tap log options (see
+-- lookup_view.py's "Sponsored" tab), or a gym's classes show up as
+-- suggested workouts (see log_workout_view.py's "Suggested Classes"
+-- section). You (the admin) enter these yourself, per sponsor, from the
+-- in-app Sponsor Requests screen -- there's no sponsor-facing submission
+-- form for this, same admin-managed pattern as approving the sponsor row
+-- itself. item_type picks which set of fields is meaningful: 'meal' uses
+-- calories/protein/carbs/fat, 'workout' uses duration_minutes/
+-- calories_burned; the unused set stays null rather than having two
+-- separate tables, since a menu item never needs both.
+create table if not exists sponsor_menu_items (
+    id bigint generated always as identity primary key,
+    sponsor_id bigint not null references sponsors(id) on delete cascade,
+    item_type text not null default 'meal',
+    name text not null,
+    calories integer,
+    protein integer,
+    carbs integer,
+    fat integer,
+    duration_minutes integer,
+    calories_burned integer,
+    active boolean not null default true,
+    sort_order integer not null default 0,
+    created_at timestamptz not null default now()
+);
+
+alter table sponsor_menu_items drop constraint if exists sponsor_menu_items_item_type_check;
+alter table sponsor_menu_items add constraint sponsor_menu_items_item_type_check
+    check (item_type in ('meal', 'workout'));
+
+alter table sponsor_menu_items enable row level security;
+
+-- Readable by any signed-in user, but only items belonging to a sponsor
+-- that's actually approved, active, AND Gold tier -- Bronze/Silver/Category
+-- Exclusive sponsors don't carry the native-integration promise, so their
+-- items (if any exist from a since-downgraded sponsor) never surface even
+-- if left active=true here.
+drop policy if exists "sponsor_menu_items_select_gold_active" on sponsor_menu_items;
+create policy "sponsor_menu_items_select_gold_active" on sponsor_menu_items
+    for select to authenticated using (
+        active = true
+        and exists (
+            select 1 from sponsors s
+            where s.id = sponsor_menu_items.sponsor_id
+            and s.status = 'approved' and s.active = true and s.level = 'gold'
+        )
+    );
+
+-- Admin-only write access -- same profiles.is_admin check as
+-- sponsors_update_owner, no separate sponsor login exists for this.
+drop policy if exists "sponsor_menu_items_all_owner" on sponsor_menu_items;
+create policy "sponsor_menu_items_all_owner" on sponsor_menu_items
+    for all to authenticated
+    using (exists (select 1 from profiles where id = auth.uid() and is_admin))
+    with check (exists (select 1 from profiles where id = auth.uid() and is_admin));
 
 alter table circles enable row level security;
 alter table circle_members enable row level security;
@@ -350,21 +442,36 @@ create policy "circle_checkins_insert_self" on circle_checkins
     );
 
 -- Meal Posts: a lightweight photo-sharing feed, separate from food_logs.
--- Posting is a deliberate share, not a side effect of AI logging -- there's
--- no macro data here, just a photo + optional caption. Each post is either
--- 'public' (any signed-in user can see it) or 'circle' (only members of the
--- one circle_id it's posted to, via my_circle_ids() -- see above). Deleting
--- a circle cascades to its circle-only posts.
+-- Posting is a deliberate share, not a side effect of AI logging. Macro
+-- fields are optional (nullable) -- a post can be just a photo + caption,
+-- or the poster can choose to include the meal's calories/protein/carbs/fat
+-- alongside it. Each post is either 'public' (any signed-in user can see
+-- it) or 'circle' (only members of the one circle_id it's posted to, via
+-- my_circle_ids() -- see above). Deleting a circle cascades to its
+-- circle-only posts.
 create table if not exists meal_posts (
     id bigint generated always as identity primary key,
     user_id uuid not null references auth.users(id),
     display_name text not null,
     photo_url text not null,
+    meal_name text,
+    ingredients text,
     caption text,
     visibility text not null default 'public', -- 'public' or 'circle'
     circle_id bigint references circles(id) on delete cascade,
+    calories integer,
+    protein integer,
+    carbs integer,
+    fat integer,
     created_at timestamptz not null default now()
 );
+
+alter table meal_posts add column if not exists calories integer;
+alter table meal_posts add column if not exists protein integer;
+alter table meal_posts add column if not exists carbs integer;
+alter table meal_posts add column if not exists fat integer;
+alter table meal_posts add column if not exists meal_name text;
+alter table meal_posts add column if not exists ingredients text;
 
 alter table meal_posts enable row level security;
 
@@ -513,14 +620,22 @@ create policy "blocked_users_delete_own" on blocked_users
 -- Meal Post Reports: flags a post for your review. Only the reporter and
 -- the admin account (via the same profiles.is_admin flag sponsors_select_owner
 -- uses) can ever read a report row -- an accused poster never sees who
--- reported them or why.
+-- reported them or why. A reason is mandatory -- reports never auto-remove
+-- a post (that stays a deliberate admin decision in the moderation queue,
+-- see reported_posts_view.py), but a required, non-blank reason gives the
+-- admin something concrete to act on instead of an unexplained flag.
 create table if not exists meal_post_reports (
     id bigint generated always as identity primary key,
     post_id bigint not null references meal_posts(id) on delete cascade,
     reporter_id uuid not null references auth.users(id),
-    reason text,
+    reason text not null check (char_length(trim(reason)) > 0),
     created_at timestamptz not null default now()
 );
+
+update meal_post_reports set reason = 'No reason given' where reason is null or char_length(trim(reason)) = 0;
+alter table meal_post_reports alter column reason set not null;
+alter table meal_post_reports drop constraint if exists meal_post_reports_reason_not_blank;
+alter table meal_post_reports add constraint meal_post_reports_reason_not_blank check (char_length(trim(reason)) > 0);
 
 alter table meal_post_reports enable row level security;
 

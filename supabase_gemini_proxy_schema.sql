@@ -1,7 +1,8 @@
 -- Gemini proxy support: per-user daily request counter used by
--- supabase/functions/gemini-proxy/index.ts to rate-limit AI calls now that
+-- supabase/functions/gemini-proxy/index.ts to track AI call volume now that
 -- they're routed through that Edge Function instead of straight from the
--- app to Gemini with an embedded key.
+-- app to Gemini with an embedded key. Informational only -- the Edge
+-- Function no longer rejects requests based on this count.
 --
 -- Run this once in the Supabase SQL editor (Dashboard -> SQL Editor -> New
 -- query), before deploying the Edge Function. Safe to re-run: table uses

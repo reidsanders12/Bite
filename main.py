@@ -15,6 +15,7 @@ from app.views.auth_view import build_auth_view
 from app.views.circles_view import build_circles_view
 from app.views.coach_view import build_coach_view
 from app.views.confirm_view import build_confirm_view
+from app.views.health_view import build_health_view
 from app.views.history_view import build_history_view
 from app.views.home_view import build_home_view
 from app.views.log_workout_view import build_log_workout_view
@@ -56,6 +57,7 @@ VIEW_BUILDERS = {
     "/survey": build_survey_view,
     "/text_log": build_text_log_view,
     "/coach": build_coach_view,
+    "/health": build_health_view,
 }
 
 def main(page: ft.Page):

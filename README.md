@@ -33,10 +33,10 @@ can pull it back out and spend your Gemini quota/bill outside the app
 entirely, with no way for you to rate-limit them per user. `gemini-proxy`
 (`supabase/functions/gemini-proxy/index.ts`) fixes that: it's the only place
 the real key lives (as a Supabase secret, never in this repo or a built
-app), it checks the caller has a live Supabase session before doing
-anything, and it enforces a per-user daily request cap
-(`supabase_gemini_proxy_schema.sql`) so one leaked session can't run up the
-whole project's bill. The app still builds the exact same request it always
+app), and it checks the caller has a live Supabase session before doing
+anything. It also logs per-user request counts
+(`supabase_gemini_proxy_schema.sql`) for visibility into usage, though it no
+longer caps or rejects requests based on that count. The app still builds the exact same request it always
 did (system instruction, contents, generation config, response schema) —
 `app/ai_engine.py` just POSTs it to the proxy instead of calling the
 `google-genai` SDK directly.
@@ -86,8 +86,14 @@ separately. Live at [bitesponsors.netlify.app](https://bitesponsors.netlify.app)
 
 ## Setup
 
+Requires **Python 3.12+** (`flet-health`, used by Profile -> Connect Health
+App, fails to import below 3.10 -- see requirements.txt; 3.12 specifically
+matches the Python runtime `flet build ipa` already bundles into compiled
+iOS builds). Install it first if `python3 --version` shows anything older
+(macOS: `brew install python@3.12`).
+
 ```bash
-python3 -m venv venv
+python3.12 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -136,10 +142,6 @@ constraint on `user_id`** — the app upserts against it.
    `${SUPABASE_URL}/functions/v1/gemini-proxy` (see `app/ai_engine.py`) —
    no additional client-side config needed.
 
-The daily per-user cap (100 requests/day by default) is set in
-`supabase/functions/gemini-proxy/index.ts` (`DAILY_REQUEST_LIMIT`) — adjust
-and redeploy if you need a different limit.
-
 For Friend Circles, Workout Logging, Weight Tracking, Meal Posts, and
 Sponsors, run [`supabase_circles_schema.sql`](supabase_circles_schema.sql)
 once in the Supabase SQL editor (safe to re-run any time you pull an update
@@ -184,7 +186,33 @@ Sponsors go through a submit-then-approve flow, not direct table edits:
    `sponsors_update_owner` RLS policies, not just by hiding the button.
 3. **Go live** — approving a request sets `status='approved'` and
    `active=true`; only then does it become eligible for the home screen's
-   random pick.
+   pick.
+
+**Levels** — every sponsor picks a tier at signup: Bronze (standard
+rotation), Silver (priority rotation — shown more often), Gold (priority
+rotation + a native-integration promise, e.g. the sponsor's menu items as
+one-tap log options or a gym's classes as suggested workouts — that
+integration itself isn't built yet, this just records the tier), and
+Category Exclusive (the only sponsor shown in their category, e.g. only one
+gym). `home_view.py`'s promo pick is weighted by tier so higher levels show
+up more often; `sponsors_category_exclusive_unique`
+(`supabase_circles_schema.sql`) is a DB-level uniqueness constraint that
+blocks *approving* a second Category Exclusive sponsor in the same category
+— it'll come back as an error on the Approve button instead, telling you to
+turn the existing one off first. Note this exclusivity is app-wide, not
+per-region — Bite doesn't collect per-user location data yet, so "in their
+area" isn't enforceable until it does.
+
+**Gold's native integration** — an approved Gold sponsor gets a "Manage
+Menu" button on their card in Sponsor Requests, opening a dialog where you
+(the admin — there's no sponsor-facing form for this) add their menu items
+(restaurant meals: calories/protein/carbs/fat) or classes (gym workouts:
+duration/calories burned). These are stored in `sponsor_menu_items`
+(`supabase_circles_schema.sql`) and only ever surface for Gold sponsors —
+meal items as one-tap log options on the Lookup screen's "Sponsored" tab,
+classes as pre-fillable suggestions on the Log Workout screen. Downgrading
+or deactivating a Gold sponsor stops their items from showing without
+deleting them.
 
 Two placeholders in [`supabase_circles_schema.sql`](supabase_circles_schema.sql)
 need your real email before those owner-only policies work — search the

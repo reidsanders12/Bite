@@ -2,6 +2,13 @@
 name = "bite"
 version = "0.1.0"
 description = "Frictionless AI photo logging for calories and macros"
+# 3.10+ is a hard requirement, not just a preference: flet-health (Profile ->
+# Connect Health App) uses `X | Y` union syntax between enum classes in a
+# type hint evaluated at import time, which raises `TypeError: unsupported
+# operand type(s) for |: 'EnumMeta' and 'EnumMeta'` on 3.9. Pinned to 3.12
+# specifically to match the Python runtime `flet build ipa` already bundles
+# into compiled builds (see build/flutter/build's cpython-3.12.9 archive).
+requires-python = ">=3.12"
 
 [tool.flet]
 product = "Bite"
@@ -37,6 +44,50 @@ dark_color = "#FAF3EA"
 NSCameraUsageDescription = "Bite uses your camera to snap photos of meals for AI calorie/macro estimates and to share photos to Meal Feed."
 NSMicrophoneUsageDescription = "Bite uses your microphone to record a voice note that's transcribed into a food log entry."
 ITSAppUsesNonExemptEncryption = false
+# Profile -> Connect Health App (app/health_engine.py, flet-health). Read-only:
+# Bite never writes to Apple Health, only displays what's already there.
+NSHealthShareUsageDescription = "Bite reads your steps, calories burned, and workouts from Apple Health to show them in your profile. Bite never writes data back to Apple Health."
+NSHealthUpdateUsageDescription = "Bite reads your steps, calories burned, and workouts from Apple Health to show them in your profile. Bite never writes data back to Apple Health."
+
+# Health Connect requires minSdkVersion 26 (Android 8.0) -- the flet-build-template
+# default (flutter.minSdkVersion, 21) is too low and fails Gradle's manifest
+# merge with "uses-sdk:minSdkVersion 21 cannot be smaller than version 26
+# declared in library [:health]". Nothing else in this app needs anything
+# below 26, so raising the floor here doesn't drop support for any real
+# target device (Android 8.0 shipped in 2017).
+[tool.flet.android]
+min_sdk_version = 26
+
+# Health Connect (Android) permissions for the same feature -- scoped to
+# exactly what app/health_engine.py reads (steps, calories, workouts, sleep),
+# not the much longer list flet-health's own README example requests.
+# ACTIVITY_RECOGNITION is required by Health Connect specifically for step
+# data, per flet-health's docs.
+[tool.flet.android.permission]
+"android.permission.health.READ_STEPS" = true
+"android.permission.health.READ_ACTIVE_CALORIES_BURNED" = true
+"android.permission.health.READ_TOTAL_CALORIES_BURNED" = true
+"android.permission.health.READ_EXERCISE" = true
+"android.permission.health.READ_SLEEP" = true
+"android.permission.ACTIVITY_RECOGNITION" = true
+
+# Points `flet build` at a customized fork of flet-dev/flet-build-template
+# (cloned to ../flet-build-template, sibling to this repo, on the 0.28.3
+# branch matching the flet version pinned in requirements.txt) instead of
+# the stock template. flet-health/Health Connect needs two native-file
+# changes the stock template has no config hook for: MainActivity.kt must
+# extend FlutterFragmentActivity instead of FlutterActivity, and
+# AndroidManifest.xml needs Health Connect's permission-rationale
+# intent-filters and a <queries> block to detect whether Health Connect is
+# installed. See ../flet-build-template's git log for exactly what changed.
+# NOT yet handled here: the iOS "HealthKit" Xcode capability (creates a
+# Runner.entitlements file + wires it into the Xcode project) -- flet-health's
+# own docs mark this "Optional", and since editing a .pbxproj by hand without
+# being able to test-build it is a real way to quietly break iOS signing,
+# that step is left as a one-time manual Xcode edit for whoever first does a
+# signed iOS build, not automated in this template fork.
+[tool.flet.template]
+dir = "/Users/reidsanders/Bite/flet-build-template"
 
 # flet 0.28.3's Flutter build template overrides `record` to ^5.1.1 (needed
 # by flet_audio_recorder), but the pub resolver still freely picks the

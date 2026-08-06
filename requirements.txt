@@ -23,3 +23,12 @@ opencv-python==4.12.0.88
 # device) when `websockets` resolves to 14.x or newer. 13.0.1 is the newest
 # version confirmed to still work. See flet-dev/flet issues #4884 and #5603.
 websockets==13.0.1
+
+# Health App integration (Profile -> Connect Health App): wraps the Flutter
+# `health` package to read Apple HealthKit (iOS) / Health Connect (Android)
+# data. Requires flet>=0.25.2, which flet==0.28.3 above satisfies.
+# flet-permission-handler is its stated companion dependency for the
+# runtime OS permission prompts. Only meaningful on iOS/Android builds --
+# see app/health_engine.py and app/views/health_view.py.
+flet-health==0.1.2
+flet-permission-handler==0.1.0

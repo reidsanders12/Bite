@@ -11,8 +11,9 @@
 // request payload it always did (system instruction, contents, generation
 // config, response schema) and POSTs it here instead of calling Gemini
 // directly; this function checks the caller is a real signed-in user,
-// enforces a per-user daily cap, forwards the request to Gemini with the
-// server-only key, and relays the response back unchanged.
+// tracks per-user usage (unenforced -- see gemini_usage), forwards the
+// request to Gemini with the server-only key, and relays the response back
+// unchanged.
 //
 // Deploy: supabase functions deploy gemini-proxy
 // Secrets needed (supabase secrets set NAME=value):
@@ -31,7 +32,6 @@ const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
 const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
-const DAILY_REQUEST_LIMIT = 100;
 // Allow-list, not just a default -- the client picks the model name in its
 // request body, and it can't be trusted to only ever send an expected value
 // even though it can no longer reach Gemini (or spend your quota) directly.
@@ -81,22 +81,16 @@ Deno.serve(async (req) => {
   // zero anon/authenticated policies on purpose (see
   // supabase_gemini_proxy_schema.sql), so only this trusted server code can
   // touch it. Atomic upsert-increment via RPC avoids a read-then-write race
-  // between two concurrent requests from the same user.
+  // between two concurrent requests from the same user. Purely informational
+  // now -- nothing here rejects the request based on the count.
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const today = new Date().toISOString().slice(0, 10);
-  const { data: newCount, error: usageErr } = await admin.rpc("increment_gemini_usage", {
+  const { error: usageErr } = await admin.rpc("increment_gemini_usage", {
     p_user_id: userId,
     p_usage_date: today,
   });
   if (usageErr) {
-    console.error("[gemini-proxy] usage counter failed:", usageErr);
-    return jsonResponse({ error: "Rate limit check failed -- please try again." }, 500);
-  }
-  if ((newCount as number) > DAILY_REQUEST_LIMIT) {
-    return jsonResponse(
-      { error: `Daily AI request limit reached (${DAILY_REQUEST_LIMIT}/day). Try again tomorrow.` },
-      429,
-    );
+    console.error("[gemini-proxy] usage counter failed (non-fatal):", usageErr);
   }
 
   let body: ProxyRequestBody;

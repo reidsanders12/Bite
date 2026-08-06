@@ -40,6 +40,8 @@ class AppState:
         self.weight_history: list = []  # full weight history, oldest first -- weight screen
         self.sponsors: list = []  # active sponsor rows -- home screen promo slot
         self.sponsor_requests: list = []  # every sponsor row, any status -- admin review screen
+        self.sponsor_meal_items: list = []  # Gold sponsors' one-tap meal log options -- lookup screen
+        self.sponsor_workout_items: list = []  # Gold sponsors' suggested classes -- log workout screen
         self.meal_feed: list = []  # posts visible to the caller -- meal feed screen
         self.meal_post_like_counts: dict = {}  # post_id -> like count -- meal feed screen
         self.my_liked_post_ids: set = set()  # post ids the caller has liked -- meal feed screen
@@ -257,6 +259,53 @@ class AppState:
             self.refresh_sponsor_requests()
         return success, err
 
+    # --- SPONSOR MENU ITEMS (Gold-tier native integration) ---
+
+    def refresh_sponsor_meal_items(self) -> None:
+        """Pulls active Gold-sponsor meal items for the lookup screen's
+        one-tap log options."""
+        try:
+            self.sponsor_meal_items = self.db.get_gold_sponsor_menu_items("meal")
+        except Exception as err:
+            logger.error("Sponsor meal item sync failed: %s", err)
+            self.sponsor_meal_items = []
+
+    def get_sponsor_meal_items(self) -> list:
+        """Returns the cached list of active Gold-sponsor meal items."""
+        return self.sponsor_meal_items
+
+    def refresh_sponsor_workout_items(self) -> None:
+        """Pulls active Gold-sponsor classes for the log workout screen's
+        suggested-workout section."""
+        try:
+            self.sponsor_workout_items = self.db.get_gold_sponsor_menu_items("workout")
+        except Exception as err:
+            logger.error("Sponsor workout item sync failed: %s", err)
+            self.sponsor_workout_items = []
+
+    def get_sponsor_workout_items(self) -> list:
+        """Returns the cached list of active Gold-sponsor classes."""
+        return self.sponsor_workout_items
+
+    def get_sponsor_menu_items_admin(self, sponsor_id: int) -> list:
+        """Every menu item (active or not) for one sponsor, for the admin's
+        Manage Menu dialog. RLS returns empty for non-admins regardless."""
+        if not self.is_admin():
+            return []
+        return self.db.get_sponsor_menu_items_for_admin(sponsor_id)
+
+    def add_sponsor_menu_item(self, sponsor_id: int, item_type: str, name: str, **fields) -> tuple[bool, str]:
+        """Adds one menu item to a sponsor (admin only)."""
+        if not self.is_admin():
+            return False, "Only the admin account can manage sponsor menus."
+        return self.db.add_sponsor_menu_item(sponsor_id, item_type, name, **fields)
+
+    def delete_sponsor_menu_item(self, item_id: int) -> tuple[bool, str]:
+        """Removes a menu item (admin only)."""
+        if not self.is_admin():
+            return False, "Only the admin account can manage sponsor menus."
+        return self.db.delete_sponsor_menu_item(item_id)
+
     def _auto_checkin_circles(self, trigger_type: str) -> None:
         """Marks today's goal done for any circle whose goal_type matches what
         was just logged -- a workout, or hitting today's calorie target --
@@ -466,7 +515,13 @@ class AppState:
 
     def report_meal_post(self, post_id: int, reason: str) -> tuple[bool, str]:
         """Flags a post for admin review. Doesn't remove it from the
-        reporter's own feed -- that's what Block is for."""
+        reporter's own feed -- that's what Block is for. A reason is
+        mandatory (also enforced by the DB check constraint) so the admin
+        moderation queue always has something concrete to act on -- see
+        reported_posts_view.py."""
+        reason = (reason or "").strip()
+        if not reason:
+            return False, "Please tell us why you're reporting this post."
         return self.db.report_meal_post(post_id, reason)
 
     def refresh_reported_posts(self) -> None:
@@ -506,16 +561,24 @@ class AppState:
 
     def post_meal(
         self, photo_bytes: bytes, caption: str, visibility: str = "public", circle_id: Optional[int] = None,
+        calories: Optional[int] = None, protein: Optional[int] = None,
+        carbs: Optional[int] = None, fat: Optional[int] = None, show_name: bool = True,
+        meal_name: str = "", ingredients: str = "",
     ) -> tuple[bool, str]:
-        """Uploads a meal photo and creates the post, then refreshes the feed cache."""
-        if not moderation.is_caption_allowed(caption):
-            return False, "Your caption isn't allowed -- please revise it."
+        """Uploads a meal photo and creates the post, then refreshes the feed cache.
+        show_name=False stores the post under "Anonymous" instead of the
+        caller's real display name."""
+        for text in (caption, meal_name, ingredients):
+            if not moderation.is_caption_allowed(text):
+                return False, "Something you wrote isn't allowed -- please revise it."
 
+        display_name = (self.current_user_name or "Bite User") if show_name else "Anonymous"
         photo_url, err = self.db.upload_meal_photo(photo_bytes)
         if not photo_url:
             return False, err
         success, err = self.db.create_meal_post(
-            photo_url, caption, self.current_user_name or "Bite User", visibility, circle_id,
+            photo_url, caption, display_name, visibility, circle_id,
+            calories, protein, carbs, fat, meal_name, ingredients,
         )
         if success:
             self.refresh_meal_feed()
@@ -544,3 +607,4 @@ class AppState:
         """Purges staging data cleanly upon workflow execution finishes."""
         self.pending_breakdown = None
         self.pending_source = None
+

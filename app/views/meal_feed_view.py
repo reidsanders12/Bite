@@ -60,16 +60,26 @@ def _post_card(post: dict, circle_names: dict, my_uid, state, page: ft.Page, rer
 
     report_dialog = ft.AlertDialog(modal=True)
     reason_field = ft.TextField(
-        label="Why are you reporting this? (optional)", multiline=True, min_lines=2, max_lines=4,
+        label="Why are you reporting this?", multiline=True, min_lines=2, max_lines=4,
         **theme.styled_field(),
     )
 
     def open_report_dialog(e):
         reason_field.value = ""
+        reason_field.error_text = None
 
         def submit_report(e2):
-            state.report_meal_post(post_id, reason_field.value or "")
-            page.close(report_dialog)
+            reason = (reason_field.value or "").strip()
+            if not reason:
+                reason_field.error_text = "A reason is required."
+                page.update()
+                return
+            success, err = state.report_meal_post(post_id, reason)
+            if success:
+                page.close(report_dialog)
+            else:
+                reason_field.error_text = err
+                page.update()
 
         def cancel(e2):
             page.close(report_dialog)
@@ -164,9 +174,39 @@ def _post_card(post: dict, circle_names: dict, my_uid, state, page: ft.Page, rer
         spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
-    footer_items = [like_row]
+    meal_name = post.get("meal_name") or ""
+    ingredients_text = post.get("ingredients") or ""
+    ingredient_lines = [line.strip() for line in ingredients_text.splitlines() if line.strip()]
+
+    footer_items = []
+    if meal_name:
+        footer_items.append(ft.Text(meal_name, size=15, weight="bold", color=theme.TEXT_PRIMARY))
+
+    macro_specs = [
+        (post.get("calories"), "", "kcal", theme.ACCENT),
+        (post.get("protein"), "g", "protein", theme.PROTEIN),
+        (post.get("carbs"), "g", "carbs", theme.CARBS),
+        (post.get("fat"), "g", "fat", theme.FAT),
+    ]
+    macro_tiles = [
+        theme.macro_tile(f"{value:,}{unit}", label, color)
+        for value, unit, label, color in macro_specs if value is not None
+    ]
+    if macro_tiles:
+        footer_items.append(ft.Row(macro_tiles, spacing=8))
+
+    if ingredient_lines:
+        footer_items.append(
+            ft.Column(
+                [ft.Text(f"• {line}", size=12, color=theme.TEXT_MUTED) for line in ingredient_lines],
+                spacing=2,
+            )
+        )
+
     if caption:
         footer_items.append(ft.Text(caption, size=13, color=theme.TEXT_PRIMARY))
+
+    footer_items.append(like_row)
 
     footer = ft.Container(
         content=ft.Column(footer_items, spacing=6),

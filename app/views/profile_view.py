@@ -332,6 +332,12 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                         on_click=lambda _: page.go("/pr_tracker")
                     ),
                     ft.TextButton(
+                        "Connect Health App",
+                        icon=ft.Icons.FAVORITE_BORDER_ROUNDED,
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                        on_click=lambda _: page.go("/health")
+                    ),
+                    ft.TextButton(
                         "Sponsor Requests",
                         icon=ft.Icons.CAMPAIGN_OUTLINED,
                         style=ft.ButtonStyle(color=theme.TEXT_MUTED),

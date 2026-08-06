@@ -228,8 +228,11 @@ async def _call_gemini(
                 continue
 
             if resp.status_code == 429:
+                # Not one of our own checks anymore -- the proxy no longer
+                # enforces a daily cap. A 429 here can only be Gemini's own
+                # upstream rate limit relayed through as-is.
                 detail = _safe_error_detail(resp)
-                raise AIEngineError(detail or "Daily AI request limit reached. Try again tomorrow.")
+                raise AIEngineError(detail or "The AI service is rate-limited right now. Please try again shortly.")
             if resp.status_code == 401:
                 raise AIEngineError("Your session expired -- please sign in again.")
             if resp.status_code >= 500 and attempt < _MAX_RETRIES - 1:

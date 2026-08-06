@@ -60,6 +60,7 @@ def build_reported_posts_view(page: ft.Page, state) -> ft.View:
             report_id = r.get("id")
             post_id = r.get("post_id")
             author = post.get("display_name", "Unknown user")
+            meal_name = post.get("meal_name") or ""
             caption = post.get("caption") or ""
             photo_url = post.get("photo_url")
             reason = r.get("reason") or "No reason given"
@@ -78,6 +79,7 @@ def build_reported_posts_view(page: ft.Page, state) -> ft.View:
                                 src=photo_url, fit=ft.ImageFit.COVER, height=160,
                                 border_radius=theme.RADIUS_SM,
                             ) if photo_url else ft.Container(),
+                            ft.Text(meal_name, size=13, weight="bold", color=theme.TEXT_PRIMARY) if meal_name else ft.Container(),
                             ft.Text(caption, size=12, color=theme.TEXT_PRIMARY) if caption else ft.Container(),
                             ft.Text(f"Reason: {reason}", size=12, color=theme.TEXT_MUTED, italic=True),
                             ft.Row(

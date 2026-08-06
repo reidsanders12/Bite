@@ -8,6 +8,11 @@ from app import promotions
 from app import theme
 from app.state import AppState
 
+# Relative odds a sponsor's promo is the one picked on any given home load --
+# higher tiers show up more often. Category Exclusive sits above Gold since
+# it's the only voice in its whole category, not just a bigger rotation share.
+_SPONSOR_LEVEL_WEIGHTS = {"bronze": 1, "silver": 2, "gold": 4, "category_exclusive": 5}
+
 def build_home_view(page: ft.Page, state: AppState) -> ft.View:
     if hasattr(state, "refresh_logs"):
         state.refresh_logs()
@@ -235,6 +240,24 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         border_radius=theme.RADIUS_LG,
     )
 
+    # TODAY'S LINEUP fold/unfold -- purely a display toggle (no data changes,
+    # no rerender()), so it stays snappy and doesn't refetch anything.
+    meals_expanded = [True]
+    fold_icon_btn = ft.IconButton(
+        icon=ft.Icons.KEYBOARD_ARROW_UP_ROUNDED,
+        icon_color=theme.TEXT_FAINT,
+        icon_size=20,
+        tooltip="Collapse",
+    )
+
+    def toggle_meals_section(e):
+        meals_expanded[0] = not meals_expanded[0]
+        timeline_items.visible = meals_expanded[0]
+        fold_icon_btn.icon = ft.Icons.KEYBOARD_ARROW_UP_ROUNDED if meals_expanded[0] else ft.Icons.KEYBOARD_ARROW_DOWN_ROUNDED
+        fold_icon_btn.tooltip = "Collapse" if meals_expanded[0] else "Expand"
+        page.update()
+    fold_icon_btn.on_click = toggle_meals_section
+
     # Timeline Build List
     timeline_items = ft.Column(spacing=12)
     if not daily_logs:
@@ -358,11 +381,13 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
 
     # Promotions -- active sponsor rows come from Supabase's `sponsors`
     # table (submitted via sponsor_signup.html, reviewed from Profile ->
-    # Sponsor Requests). One is picked at random each home load as a simple
-    # rotation across multiple active sponsors.
+    # Sponsor Requests). One is picked each home load, weighted by tier so
+    # higher levels show up more often -- Gold/Category Exclusive sponsors
+    # are paying for prominence, not just an equal shot in the rotation.
     sponsors = state.get_sponsors() if hasattr(state, "get_sponsors") else []
     if sponsors:
-        sponsor = random.choice(sponsors)
+        weights = [_SPONSOR_LEVEL_WEIGHTS.get(s.get("level"), 1) for s in sponsors]
+        sponsor = random.choices(sponsors, weights=weights, k=1)[0]
         raw_url = (sponsor.get("website_url") or "").strip()
         # Only ever open http(s) links -- defense-in-depth against a
         # malicious/mistaken javascript:, file:, or other unexpected scheme
@@ -374,7 +399,13 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                     ft.Icon(promotions.icon_for(sponsor.get("icon_name")), size=26, color=theme.ACCENT),
                     ft.Column(
                         [
-                            ft.Text(sponsor.get("sponsor_label", "Sponsored"), size=10, weight="bold", color=theme.TEXT_FAINT),
+                            ft.Row(
+                                [
+                                    ft.Text(sponsor.get("sponsor_label", "Sponsored"), size=10, weight="bold", color=theme.TEXT_FAINT),
+                                    theme.sponsor_level_badge(sponsor.get("level")),
+                                ],
+                                spacing=6,
+                            ),
                             ft.Text(sponsor.get("title", ""), size=14, weight="w600", color=theme.TEXT_PRIMARY),
                             ft.Text(sponsor.get("subtitle", ""), size=12, color=theme.TEXT_MUTED),
                         ],
@@ -441,7 +472,13 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                         ],
                         spacing=0,
                     ) if daily_workouts else ft.Container(),
-                    ft.Text("TODAY'S LINEUP", size=11, color=theme.TEXT_FAINT, weight="w700"),
+                    ft.Row(
+                        [
+                            ft.Text("TODAY'S LINEUP", size=11, color=theme.TEXT_FAINT, weight="w700", expand=True),
+                            fold_icon_btn,
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
                     timeline_items,
                     promo_card,
                 ], spacing=18, scroll=ft.ScrollMode.HIDDEN),

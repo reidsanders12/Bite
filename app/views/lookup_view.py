@@ -9,7 +9,9 @@ import logging
 import flet as ft
 
 from app import food_apis
+from app import promotions
 from app import theme
+from app.models import MacroBreakdown
 from app.state import AppState
 from app.views.widgets import error_banner, loading_view
 from app.views.snap_view import camera_manager  # Centralized camera helper engine
@@ -19,6 +21,9 @@ logger = logging.getLogger(__name__)
 
 
 def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
+    if hasattr(state, "refresh_sponsor_meal_items"):
+        state.refresh_sponsor_meal_items()
+
     # State tracking variables
     current_tab = [0]  # Scoped array reference pointer to avoid nonlocal binding mismatch
     camera_active = [False]
@@ -193,31 +198,35 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
             spacing=10,
         )
 
+    def build_sponsored_tab():
+        items = state.get_sponsor_meal_items() if hasattr(state, "get_sponsor_meal_items") else []
+        if not items:
+            return ft.Column(
+                [ft.Text("No sponsored menu items right now.", size=12, color=theme.TEXT_FAINT, italic=True)],
+                spacing=10,
+            )
+        return ft.Column([_sponsor_item_card(item, state, page) for item in items], spacing=8)
+
     tab_barcode_btn = ft.Container(expand=True)
     tab_usda_btn = ft.Container(expand=True)
+    tab_sponsored_btn = ft.Container(expand=True)
+
+    tabs = [
+        (tab_barcode_btn, build_barcode_tab),
+        (tab_usda_btn, build_usda_tab),
+        (tab_sponsored_btn, build_sponsored_tab),
+    ]
 
     def update_tab_ui():
         stop_barcode_camera()
         results_area.controls = []
 
-        if current_tab[0] == 0:
-            tab_barcode_btn.bgcolor = theme.BG_SURFACE_ALT
-            tab_barcode_btn.border = ft.border.all(1, theme.ACCENT)
-            tab_barcode_btn.content.controls[0].color = theme.ACCENT
-
-            tab_usda_btn.bgcolor = "transparent"
-            tab_usda_btn.border = None
-            tab_usda_btn.content.controls[0].color = theme.TEXT_MUTED
-            tabs_content.content = build_barcode_tab()
-        else:
-            tab_usda_btn.bgcolor = theme.BG_SURFACE_ALT
-            tab_usda_btn.border = ft.border.all(1, theme.ACCENT)
-            tab_usda_btn.content.controls[0].color = theme.ACCENT
-
-            tab_barcode_btn.bgcolor = "transparent"
-            tab_barcode_btn.border = None
-            tab_barcode_btn.content.controls[0].color = theme.TEXT_MUTED
-            tabs_content.content = build_usda_tab()
+        for index, (btn, builder) in enumerate(tabs):
+            active = index == current_tab[0]
+            btn.bgcolor = theme.BG_SURFACE_ALT if active else "transparent"
+            btn.border = ft.border.all(1, theme.ACCENT) if active else None
+            btn.content.controls[0].color = theme.ACCENT if active else theme.TEXT_MUTED
+        tabs_content.content = tabs[current_tab[0]][1]()
 
     def switch_tabs(target_index: int):
         if current_tab[0] == target_index:
@@ -237,8 +246,13 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
     tab_usda_btn.border_radius = theme.RADIUS_SM
     tab_usda_btn.on_click = lambda _: switch_tabs(1)
 
+    tab_sponsored_btn.content = ft.Row([ft.Text("Sponsored", weight="bold")], alignment=ft.MainAxisAlignment.CENTER)
+    tab_sponsored_btn.padding = 12
+    tab_sponsored_btn.border_radius = theme.RADIUS_SM
+    tab_sponsored_btn.on_click = lambda _: switch_tabs(2)
+
     custom_tabs_bar = ft.Container(
-        content=ft.Row([tab_barcode_btn, tab_usda_btn], spacing=5),
+        content=ft.Row([tab_barcode_btn, tab_usda_btn, tab_sponsored_btn], spacing=5),
         bgcolor=theme.BG_SURFACE,
         padding=6,
         border_radius=theme.RADIUS_SM,
@@ -345,4 +359,58 @@ def _ingredient_card(breakdown, state: AppState, page: ft.Page) -> ft.Control:
         border_radius=theme.RADIUS_MD,
         bgcolor=theme.BG_SURFACE,
         border=ft.border.all(1, theme.BORDER)
+    )
+
+
+def _sponsor_item_card(item: dict, state: AppState, page: ft.Page) -> ft.Control:
+    """A Gold sponsor's menu item -- the "native integration" promise from
+    the sponsor tiers (see sponsor_requests_view.py's Manage Menu dialog).
+    Tapping it stages the sponsor's own macro numbers exactly like a
+    barcode/USDA hit, one tap into the same Confirm screen."""
+    sponsor_name = (item.get("sponsors") or {}).get("title", "Sponsor")
+    icon_name = (item.get("sponsors") or {}).get("icon_name")
+
+    def on_log(e):
+        breakdown = MacroBreakdown(
+            meal_name=item.get("name", ""),
+            calories=item.get("calories") or 0,
+            protein=item.get("protein") or 0,
+            carbs=item.get("carbs") or 0,
+            fat=item.get("fat") or 0,
+        )
+        state.set_pending(breakdown, source="sponsor")
+        page.go("/confirm")
+
+    return ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(promotions.icon_for(icon_name), size=22, color=theme.ACCENT),
+                ft.Column(
+                    [
+                        ft.Text(sponsor_name.upper(), size=10, weight="bold", color=theme.TEXT_FAINT),
+                        ft.Text(item.get("name", "").upper(), weight=ft.FontWeight.BOLD, size=14),
+                        ft.Text(
+                            f"{item.get('calories') or 0} kcal • "
+                            f"P: {item.get('protein') or 0}g  C: {item.get('carbs') or 0}g  F: {item.get('fat') or 0}g",
+                            size=12,
+                            color=theme.TEXT_MUTED,
+                        ),
+                    ],
+                    expand=True,
+                    spacing=2,
+                ),
+                ft.IconButton(
+                    icon=ft.Icons.ADD_LINK_ROUNDED,
+                    icon_color=theme.ACCENT,
+                    on_click=on_log,
+                    tooltip="Log this item",
+                ),
+            ],
+            spacing=10,
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+        ),
+        padding=16,
+        border_radius=theme.RADIUS_MD,
+        bgcolor=theme.BG_SURFACE,
+        border=ft.border.all(1, theme.BORDER),
     )

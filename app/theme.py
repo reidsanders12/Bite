@@ -33,6 +33,22 @@ FAT = "#D19A3D"           # mustard
 ERROR = "#B3261E"
 SUCCESS = "#4F7942"
 
+# Sponsor tier colors -- kept in the same warm/muted family as the rest of
+# the palette rather than literal metal tones, so a Gold/Category Exclusive
+# badge doesn't clash against BG_SURFACE_ALT the way a bright yellow would.
+SPONSOR_LEVEL_COLORS = {
+    "bronze": "#9C6B44",
+    "silver": "#8C8578",
+    "gold": FAT,
+    "category_exclusive": ACCENT,
+}
+SPONSOR_LEVEL_LABELS = {
+    "bronze": "Bronze",
+    "silver": "Silver",
+    "gold": "Gold",
+    "category_exclusive": "Category Exclusive",
+}
+
 RADIUS_SM = 6
 RADIUS_MD = 8
 RADIUS_LG = 12
@@ -138,6 +154,42 @@ def app_bar(title: str, on_back=None, actions=None) -> ft.AppBar:
         if on_back
         else None,
         actions=actions,
+    )
+
+
+def macro_tile(value: str, label: str, color: str) -> ft.Container:
+    """Small stat tile: bold colored value over a muted label on a chip
+    background. Matches the AI Coach's macro tiles (coach_view._remaining_tile)
+    so macros read consistently wherever they're shown."""
+    return ft.Container(
+        content=ft.Column(
+            [
+                ft.Text(value, size=17, weight="bold", color=color),
+                ft.Text(label, size=11, color=TEXT_MUTED),
+            ],
+            spacing=2,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        bgcolor=BG_SURFACE_ALT,
+        border_radius=RADIUS_SM,
+        padding=ft.padding.symmetric(vertical=10, horizontal=8),
+        expand=True,
+        alignment=ft.alignment.center,
+    )
+
+
+def sponsor_level_badge(level: str) -> ft.Container:
+    """Small pill showing a sponsor's tier (Bronze/Silver/Gold/Category
+    Exclusive), colored via SPONSOR_LEVEL_COLORS. Unrecognized/missing
+    levels fall back to Bronze's styling rather than erroring."""
+    color = SPONSOR_LEVEL_COLORS.get(level, SPONSOR_LEVEL_COLORS["bronze"])
+    label = SPONSOR_LEVEL_LABELS.get(level, "Bronze")
+    return ft.Container(
+        content=ft.Text(label.upper(), size=10, weight="bold", color=color),
+        bgcolor=BG_SURFACE_ALT,
+        border=ft.border.all(1, color),
+        border_radius=RADIUS_SM,
+        padding=ft.padding.symmetric(vertical=3, horizontal=8),
     )
 
 
