@@ -306,6 +306,11 @@ class AppState:
             return False, "Only the admin account can manage sponsor menus."
         return self.db.delete_sponsor_menu_item(item_id)
 
+    def get_or_create_sponsor_redemption(self, sponsor_id: int) -> tuple[Optional[dict], str]:
+        """This user's redemption code for a sponsor card's "Redeem" dialog
+        (see home_view.py) -- created on first request, stable after that."""
+        return self.db.get_or_create_sponsor_redemption(sponsor_id)
+
     def _auto_checkin_circles(self, trigger_type: str) -> None:
         """Marks today's goal done for any circle whose goal_type matches what
         was just logged -- a workout, or hitting today's calorie target --

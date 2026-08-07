@@ -32,3 +32,8 @@ websockets==13.0.1
 # see app/health_engine.py and app/views/health_view.py.
 flet-health==0.1.2
 flet-permission-handler==0.1.0
+
+# Sponsor card "Redeem" QR code (app/qr_engine.py). Pure-Python by default
+# (no Pillow) -- same Android-wheel caution as opencv-python above, so we
+# stick to the qrcode.image.pure backend rather than adding Pillow too.
+qrcode==7.4.2

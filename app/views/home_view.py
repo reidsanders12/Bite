@@ -5,7 +5,9 @@ import random
 
 import flet as ft
 from app import promotions
+from app import qr_engine
 from app import theme
+from app.config import SUPABASE_URL
 from app.state import AppState
 
 # Relative odds a sponsor's promo is the one picked on any given home load --
@@ -385,6 +387,36 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
     # higher levels show up more often -- Gold/Category Exclusive sponsors
     # are paying for prominence, not just an equal shot in the rotation.
     sponsors = state.get_sponsors() if hasattr(state, "get_sponsors") else []
+    redeem_dialog = ft.AlertDialog(modal=True)
+
+    def open_redeem_dialog(e, sponsor: dict) -> None:
+        redemption, err = state.get_or_create_sponsor_redemption(sponsor.get("id"))
+        if not redemption:
+            page.open(ft.SnackBar(ft.Text(err or "Couldn't generate a redeem code -- try again.")))
+            return
+        redeem_url = f"{SUPABASE_URL}/functions/v1/redeem-sponsor?code={redemption['code']}"
+        qr_b64 = qr_engine.qr_base64(redeem_url)
+        already_used = bool(redemption.get("redeemed_at"))
+        redeem_dialog.title = ft.Text(sponsor.get("title", ""), size=16, weight="bold", color=theme.TEXT_PRIMARY)
+        redeem_dialog.content = ft.Column(
+            [
+                ft.Text(
+                    "Already redeemed -- show staff the code below to confirm." if already_used
+                    else "Show this to staff to redeem:",
+                    size=12, color=theme.TEXT_MUTED, text_align=ft.TextAlign.CENTER,
+                ),
+                ft.Container(
+                    content=ft.Image(src_base64=qr_b64, width=200, height=200),
+                    alignment=ft.alignment.center,
+                    padding=12, bgcolor="#FFFFFF", border_radius=theme.RADIUS_MD,
+                ),
+                ft.Text(redemption["code"], size=18, weight="bold", color=theme.TEXT_PRIMARY, text_align=ft.TextAlign.CENTER),
+            ],
+            tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12,
+        )
+        redeem_dialog.actions = [ft.TextButton("Close", on_click=lambda e: page.close(redeem_dialog))]
+        page.open(redeem_dialog)
+
     if sponsors:
         weights = [_SPONSOR_LEVEL_WEIGHTS.get(s.get("level"), 1) for s in sponsors]
         sponsor = random.choices(sponsors, weights=weights, k=1)[0]
@@ -412,16 +444,32 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                         expand=True,
                         spacing=2,
                     ),
-                    ft.Text(sponsor.get("cta_text", "Learn More"), size=12, weight="bold", color=theme.ACCENT),
+                    ft.Column(
+                        [
+                            ft.TextButton(
+                                content=ft.Text(sponsor.get("cta_text", "Learn More"), size=12, weight="bold", color=theme.ACCENT),
+                                style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=4, vertical=0)),
+                                on_click=(lambda e, url=website_url: page.launch_url(url)) if website_url else None,
+                                disabled=website_url is None,
+                            ),
+                            ft.TextButton(
+                                content=ft.Row(
+                                    [ft.Icon(ft.Icons.QR_CODE_ROUNDED, size=14, color=theme.TEXT_MUTED),
+                                     ft.Text("Redeem", size=12, weight="bold", color=theme.TEXT_MUTED)],
+                                    spacing=4, tight=True,
+                                ),
+                                style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=4, vertical=0)),
+                                on_click=lambda e, s=sponsor: open_redeem_dialog(e, s),
+                            ),
+                        ],
+                        spacing=0, horizontal_alignment=ft.CrossAxisAlignment.END,
+                    ),
                 ],
                 spacing=12,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             padding=16, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE_ALT,
             border=ft.border.all(1, theme.BORDER),
-            # Sponsors submitted before this field existed (or who left it
-            # blank) render the same card with no tappable CTA.
-            on_click=(lambda e, url=website_url: page.launch_url(url)) if website_url else None,
         )
     else:
         promo_card = ft.Container()

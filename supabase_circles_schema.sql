@@ -273,12 +273,33 @@ create policy "sponsor_menu_items_all_owner" on sponsor_menu_items
     using (exists (select 1 from profiles where id = auth.uid() and is_admin))
     with check (exists (select 1 from profiles where id = auth.uid() and is_admin));
 
+-- Sponsor Redemptions: proof a user actually redeemed a sponsor's promo in
+-- person, not just that the card was shown or tapped. One row per
+-- (sponsor, user), created client-side the first time that user opens the
+-- "Redeem" dialog on a sponsor card (see home_view.py); `code` is what the
+-- QR shown in that dialog encodes as a URL
+-- (`{SUPABASE_URL}/functions/v1/redeem-sponsor?code=...`), plus the
+-- human-readable fallback if staff can't scan it. `redeemed_at` is only
+-- ever set by that Edge Function (running with the service-role key) when
+-- staff open/scan it -- deliberately no update policy below, so a user
+-- can't mark their own code redeemed by calling the table directly.
+create table if not exists sponsor_redemptions (
+    id bigint generated always as identity primary key,
+    sponsor_id bigint not null references sponsors(id) on delete cascade,
+    user_id uuid not null references auth.users(id) on delete cascade,
+    code text not null unique,
+    created_at timestamptz not null default now(),
+    redeemed_at timestamptz,
+    unique (sponsor_id, user_id)
+);
+
 alter table circles enable row level security;
 alter table circle_members enable row level security;
 alter table circle_checkins enable row level security;
 alter table workout_logs enable row level security;
 alter table weight_logs enable row level security;
 alter table sponsors enable row level security;
+alter table sponsor_redemptions enable row level security;
 
 drop policy if exists "sponsors_select_active" on sponsors;
 create policy "sponsors_select_active" on sponsors
@@ -310,6 +331,16 @@ drop policy if exists "sponsors_update_owner" on sponsors;
 create policy "sponsors_update_owner" on sponsors
     for update to authenticated
     using (exists (select 1 from profiles where id = auth.uid() and is_admin));
+
+-- A user can see and create their own redemption codes, but never update
+-- one (redeemed_at) -- that's the whole point, see the table comment above.
+drop policy if exists "sponsor_redemptions_select_own" on sponsor_redemptions;
+create policy "sponsor_redemptions_select_own" on sponsor_redemptions
+    for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists "sponsor_redemptions_insert_own" on sponsor_redemptions;
+create policy "sponsor_redemptions_insert_own" on sponsor_redemptions
+    for insert to authenticated with check (user_id = auth.uid());
 
 drop policy if exists "workout_logs_select_own" on workout_logs;
 create policy "workout_logs_select_own" on workout_logs

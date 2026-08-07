@@ -1172,3 +1172,44 @@ class Database:
         except Exception as e:
             logger.error(f"Failed to delete sponsor menu item: {e}")
             return False, "Something went wrong -- please try again."
+
+    # --- SPONSOR REDEMPTIONS ---
+
+    def get_or_create_sponsor_redemption(self, sponsor_id: int) -> tuple[Optional[dict], str]:
+        """Returns this user's redemption code for a sponsor, creating one
+        the first time they open the "Redeem" dialog for it. The code never
+        changes on repeat calls -- one code per (sponsor, user), same as the
+        `sponsor_redemptions` unique constraint (supabase_circles_schema.sql)
+        -- so scanning it always resolves to the same row instead of
+        piling up unused codes every time the dialog reopens."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return None, "Please sign in again."
+        try:
+            existing = (
+                self.client.table("sponsor_redemptions")
+                .select("code, redeemed_at")
+                .eq("sponsor_id", sponsor_id)
+                .eq("user_id", uid)
+                .maybe_single()
+                .execute()
+            )
+            if existing and existing.data:
+                return existing.data, ""
+        except Exception as e:
+            logger.error(f"Failed to fetch sponsor redemption: {e}")
+            return None, "Something went wrong -- please try again."
+
+        code = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(10))
+        try:
+            response = (
+                self.client.table("sponsor_redemptions")
+                .insert({"sponsor_id": sponsor_id, "user_id": uid, "code": code})
+                .execute()
+            )
+            if not response.data:
+                return None, "Something went wrong -- please try again."
+            return response.data[0], ""
+        except Exception as e:
+            logger.error(f"Failed to create sponsor redemption: {e}")
+            return None, "Something went wrong -- please try again."
