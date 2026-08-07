@@ -1067,6 +1067,18 @@ class Database:
         """Approves/rejects a sponsor request. Restricted to the owner email
         by the sponsors_update_owner RLS policy."""
         try:
+            import base64, json as _json
+            try:
+                tok = self.get_access_token()
+                if tok:
+                    payload = tok.split(".")[1]
+                    payload += "=" * (-len(payload) % 4)
+                    claims = _json.loads(base64.urlsafe_b64decode(payload))
+                    logger.error(f"DIAG update_sponsor_status: sub={claims.get('sub')} role={claims.get('role')} exp={claims.get('exp')}")
+                else:
+                    logger.error("DIAG update_sponsor_status: no access token on client (unauthenticated)")
+            except Exception as diag_err:
+                logger.error(f"DIAG token decode failed: {diag_err}")
             response = (
                 self.client.table("sponsors")
                 .update({"status": status, "active": active})
