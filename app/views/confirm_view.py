@@ -160,6 +160,7 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
                     ft.Divider(color="transparent", height=20),
                     ft.Container(name_field, width=280),
                     subtitle_txt,
+                    theme.ai_disclaimer(),
                     ft.Divider(color=theme.BORDER, height=30),
 
                     ft.Column(

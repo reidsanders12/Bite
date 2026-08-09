@@ -1,0 +1,14 @@
+# Per-function overrides. Every Edge Function defaults to requiring a valid
+# Supabase session JWT (verify_jwt = true) unless listed here -- that's
+# correct for gemini-proxy and delete-account (both require a signed-in
+# Bite! user) so they're left at the default, undeclared.
+#
+# redeem-sponsor is different: sponsor staff scan its URL from a QR code
+# with a bare phone camera, with no Bite! login at all. Without this,
+# Supabase's gateway rejects the request before our function code ever
+# runs, and the phone's browser shows a raw JSON 401 instead of the
+# redemption page. `code` in the URL is itself the credential (a long
+# random token, see app/database.py's get_or_create_sponsor_redemption) --
+# same trust model as an emailed unsubscribe link.
+[functions.redeem-sponsor]
+verify_jwt = false

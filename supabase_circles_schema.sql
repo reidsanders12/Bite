@@ -186,6 +186,13 @@ alter table sponsors drop constraint if exists sponsors_level_check;
 alter table sponsors add constraint sponsors_level_check
     check (level in ('bronze', 'silver', 'gold', 'category_exclusive'));
 
+-- How many times (per user) this sponsor's QR/code can be redeemed --
+-- redeem_sponsor_code() below is what actually enforces it. Defaults to 1
+-- (a one-time offer, the common case); nullable, and null means unlimited
+-- -- set it that way via the Table Editor for a repeatable offer, or to
+-- any other number for e.g. "good 3 times."
+alter table sponsors add column if not exists max_redemptions_per_user integer default 1;
+
 -- Free-text business category (e.g. 'gym', 'QSR', 'yoga studio') -- only
 -- meaningful (and required app-side) when level = 'category_exclusive';
 -- null/ignored otherwise. Matching is case/whitespace-normalized via the
@@ -279,19 +286,84 @@ create policy "sponsor_menu_items_all_owner" on sponsor_menu_items
 -- "Redeem" dialog on a sponsor card (see home_view.py); `code` is what the
 -- QR shown in that dialog encodes as a URL
 -- (`{SUPABASE_URL}/functions/v1/redeem-sponsor?code=...`), plus the
--- human-readable fallback if staff can't scan it. `redeemed_at` is only
--- ever set by that Edge Function (running with the service-role key) when
--- staff open/scan it -- deliberately no update policy below, so a user
--- can't mark their own code redeemed by calling the table directly.
+-- human-readable fallback if staff can't scan it. `redemption_count` and
+-- `redeemed_at` (now "last redeemed at", not "first redeemed at") are only
+-- ever written by redeem_sponsor_code() below (SECURITY DEFINER, run from
+-- the redeem-sponsor Edge Function) -- deliberately no update policy for
+-- authenticated below, so a user can't bump their own count by calling the
+-- table directly.
 create table if not exists sponsor_redemptions (
     id bigint generated always as identity primary key,
     sponsor_id bigint not null references sponsors(id) on delete cascade,
     user_id uuid not null references auth.users(id) on delete cascade,
     code text not null unique,
     created_at timestamptz not null default now(),
+    redemption_count integer not null default 0,
     redeemed_at timestamptz,
     unique (sponsor_id, user_id)
 );
+
+alter table sponsor_redemptions add column if not exists redemption_count integer not null default 0;
+
+-- Atomically checks + increments a redemption, so two near-simultaneous
+-- scans of the same code (e.g. a shaky phone camera firing twice) can't
+-- both slip through past sponsors.max_redemptions_per_user -- `for update`
+-- takes a row lock on the matching sponsor_redemptions row for the rest of
+-- the transaction, so a second concurrent call blocks until the first
+-- commits its updated count. SECURITY DEFINER so the redeem-sponsor Edge
+-- Function (running as an unauthenticated scanner, not the code's owner)
+-- can still write to a table that otherwise has no update policy for
+-- anyone.
+--
+-- Returns zero rows for an unknown code (caller treats that as "invalid");
+-- otherwise one row with outcome 'ok' (count incremented) or
+-- 'limit_reached' (count left as-is).
+create or replace function redeem_sponsor_code(p_code text)
+returns table (
+    outcome text,
+    sponsor_title text,
+    sponsor_subtitle text,
+    redemption_count integer,
+    max_redemptions_per_user integer,
+    redeemed_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+    v_id bigint;
+    v_count integer;
+    v_max integer;
+    v_title text;
+    v_subtitle text;
+    v_redeemed_at timestamptz;
+begin
+    select sr.id, sr.redemption_count, sr.redeemed_at, s.max_redemptions_per_user, s.title, s.subtitle
+      into v_id, v_count, v_redeemed_at, v_max, v_title, v_subtitle
+      from sponsor_redemptions sr
+      join sponsors s on s.id = sr.sponsor_id
+     where sr.code = p_code
+     for update of sr;
+
+    if not found then
+        return;
+    end if;
+
+    if v_max is not null and v_count >= v_max then
+        return query select 'limit_reached', v_title, v_subtitle, v_count, v_max, v_redeemed_at;
+        return;
+    end if;
+
+    update sponsor_redemptions
+       set redemption_count = redemption_count + 1,
+           redeemed_at = now()
+     where id = v_id
+     returning redemption_count, redeemed_at into v_count, v_redeemed_at;
+
+    return query select 'ok', v_title, v_subtitle, v_count, v_max, v_redeemed_at;
+end;
+$$;
 
 alter table circles enable row level security;
 alter table circle_members enable row level security;
@@ -714,3 +786,104 @@ create policy "meal_posts_delete_admin" on meal_posts
     for delete to authenticated using (
         exists (select 1 from profiles where id = auth.uid() and is_admin)
     );
+
+-- ============================================================================
+-- SAFETY & COMPLIANCE ADDITIONS -- pre-launch Meal Feed review.
+-- ============================================================================
+
+-- Report categories: lets the report dialog offer a structured reason
+-- (Harassment/Bullying, Pro-eating-disorder content, Copyright/Trademark,
+-- Spam, Other) instead of pure free text -- 'pro_ed_content' and
+-- 'copyright' give the admin queue (reported_posts_view.py) something to
+-- sort/prioritize on, and let automated ED-phrase screening
+-- (app/moderation.py's ed_screening_flags()) file itself into the exact
+-- same queue as a human report rather than needing a parallel table.
+alter table meal_post_reports add column if not exists category text not null default 'other';
+alter table meal_post_reports drop constraint if exists meal_post_reports_category_check;
+alter table meal_post_reports add constraint meal_post_reports_category_check
+    check (category in ('harassment', 'pro_ed_content', 'copyright', 'spam', 'other'));
+
+-- Distinguishes an automated screening flag (reporter_id is the post's own
+-- author -- flagged at post time, before any human ever saw it) from a
+-- genuine human report, without needing a second table.
+alter table meal_post_reports add column if not exists is_automated boolean not null default false;
+
+-- Moderation Actions: a durable audit trail. meal_post_reports rows get
+-- DELETEd on dismiss (see meal_post_reports_delete_admin above), so without
+-- this table there would be no record that a report ever existed once it's
+-- resolved. This is what makes moderation traceable after the fact, not
+-- just actionable in the moment, per Apple/Google Play's UGC expectations.
+create table if not exists moderation_actions (
+    id bigint generated always as identity primary key,
+    actor_id uuid references auth.users(id),
+    action_type text not null check (action_type in ('flag_auto', 'flag_report', 'dismiss', 'remove_post')),
+    target_post_id bigint,
+    target_user_id uuid,
+    reason text,
+    created_at timestamptz not null default now()
+);
+
+alter table moderation_actions enable row level security;
+
+drop policy if exists "moderation_actions_select_admin" on moderation_actions;
+create policy "moderation_actions_select_admin" on moderation_actions
+    for select to authenticated using (
+        exists (select 1 from profiles where id = auth.uid() and is_admin)
+    );
+
+-- Insert is intentionally not admin-only: flag_auto/flag_report rows are
+-- written by whichever authenticated client triggers them (a poster whose
+-- own caption trips the ED screener, or a user submitting a report) --
+-- this app has no service-role/server-side write path, everything goes
+-- through the anon key + the caller's own JWT, same as every other table
+-- here. actor_id must be the caller's own uid so nobody can forge another
+-- user's id into the audit log; dismiss/remove_post rows are inserted by
+-- database.py using the admin's own uid, which satisfies this same check.
+drop policy if exists "moderation_actions_insert_self" on moderation_actions;
+create policy "moderation_actions_insert_self" on moderation_actions
+    for insert to authenticated with check (actor_id = auth.uid());
+
+-- Sponsored Meal Feed Posts: distinct from the home-screen promo slot
+-- (`sponsors` table above) -- this is scaffolding for if/when a sponsor's
+-- own content flows into the feed itself as a post, per the Sponsored
+-- Content review item. is_sponsored is a real boolean column (not
+-- inferable from sponsor_id alone) so meal_feed_view.py's "Sponsored"
+-- badge is driven by a structural flag that can't be omitted by mistake,
+-- rather than optional free text in the caption. No write path sets these
+-- yet -- create_meal_post() never passes is_sponsored=true -- since
+-- sponsors don't post into the feed today; this just makes sure the badge
+-- renders correctly the moment that write path is built.
+alter table meal_posts add column if not exists is_sponsored boolean not null default false;
+alter table meal_posts add column if not exists sponsor_id bigint references sponsors(id);
+
+alter table meal_posts drop constraint if exists meal_posts_sponsored_requires_sponsor;
+alter table meal_posts add constraint meal_posts_sponsored_requires_sponsor
+    check (is_sponsored = (sponsor_id is not null));
+
+-- Apple Health / Health Connect workout import: lets a watch workout land
+-- in the exact same workout_logs table a manual entry would, so the home
+-- screen's "Exercise" tally, the workout history list, and circle
+-- auto-checkin (state.py's _auto_checkin_circles("workout")) all pick it
+-- up for free with no separate code path. external_id is HealthKit/Health
+-- Connect's own UUID for that workout sample -- the (user_id, external_id)
+-- unique constraint is what a repeat sync upserts against so re-running
+-- the sync never double-imports the same watch workout. Postgres treats
+-- every NULL as distinct, so manual entries (external_id always null)
+-- never collide with each other under this same constraint.
+alter table workout_logs add column if not exists source text not null default 'manual';
+alter table workout_logs drop constraint if exists workout_logs_source_check;
+alter table workout_logs add constraint workout_logs_source_check
+    check (source in ('manual', 'apple_health', 'health_connect'));
+
+alter table workout_logs add column if not exists external_id text;
+alter table workout_logs drop constraint if exists workout_logs_user_external_unique;
+alter table workout_logs add constraint workout_logs_user_external_unique
+    unique (user_id, external_id);
+
+-- Lets a member undo their own today's check-in (accidental tap) -- there
+-- was previously no delete policy on circle_checkins at all, so
+-- database.undo_check_in()'s delete would have silently affected 0 rows
+-- under RLS no matter what the caller passed.
+drop policy if exists "circle_checkins_delete_own" on circle_checkins;
+create policy "circle_checkins_delete_own" on circle_checkins
+    for delete to authenticated using (user_id = auth.uid());

@@ -58,6 +58,7 @@ def build_log_workout_view(page: ft.Page, state) -> ft.View:
             name_field,
             duration_field,
             calories_field,
+            theme.ai_disclaimer(),
         ],
         spacing=12,
         visible=False,

@@ -39,3 +39,8 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
 # see README's "App Store / Play Store compliance" section.
 PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip()
 ACCOUNT_DELETION_URL = os.getenv("ACCOUNT_DELETION_URL", "").strip()
+
+# Same "host it yourself" pattern as PRIVACY_POLICY_URL above --
+# terms_of_service.html (repo root). Unset hides the Profile button rather
+# than opening a dead link, same as the other two.
+TERMS_OF_SERVICE_URL = os.getenv("TERMS_OF_SERVICE_URL", "").strip()

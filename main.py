@@ -61,7 +61,7 @@ VIEW_BUILDERS = {
 }
 
 def main(page: ft.Page):
-    page.title = "Bite"
+    page.title = "Bite!"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.fonts = {theme.DISPLAY_FONT: theme.DISPLAY_FONT_URL}
     page.theme = theme.build_theme()
@@ -94,6 +94,15 @@ def main(page: ft.Page):
                 # and the admin screen.
                 if page.route in ("/sponsor_requests", "/reported_posts") and not (
                     hasattr(state, "is_admin") and state.is_admin()
+                ):
+                    builder = build_home_view
+
+                # Meal Feed / Post a Meal are gated for known-minor accounts
+                # (app/age_gate.py) -- direct navigation to either route
+                # falls back to home, same belt-and-suspenders pattern as
+                # the admin-only routes just above.
+                if page.route in ("/meal_feed", "/post_meal") and not (
+                    hasattr(state, "can_access_meal_feed") and state.can_access_meal_feed()
                 ):
                     builder = build_home_view
 

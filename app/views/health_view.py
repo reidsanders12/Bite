@@ -8,10 +8,9 @@ iOS/Android, so the whole screen renders a short explanation there instead
 of a broken Connect button.
 """
 import flet as ft
-import flet_health as fh
 
 from app import theme
-from app.health_engine import HealthEngineError, get_today_summary, request_permission
+from app.health_engine import HealthEngineError, get_health_control, get_today_summary, get_today_workouts, request_permission
 
 
 def build_health_view(page: ft.Page, state) -> ft.View:
@@ -38,26 +37,45 @@ def build_health_view(page: ft.Page, state) -> ft.View:
             ],
         )
 
-    health = fh.Health()
-    page.overlay.append(health)
+    health = get_health_control(page, state)
 
-    label = "Apple Health" if page.platform == ft.PagePlatform.IOS else "Health Connect"
+    is_ios = page.platform == ft.PagePlatform.IOS
+    label = "Apple Health" if is_ios else "Health Connect"
+    # Distance is stored in meters regardless of platform (see
+    # health_engine.py) -- displayed in miles for an iOS device (matches
+    # Apple's own Activity/Fitness app units) and km everywhere else.
+    METERS_PER_MILE = 1609.344
 
     status_txt = ft.Text("", size=12, color=theme.TEXT_MUTED)
     summary_section = ft.Column(spacing=12)
     connect_button = theme.primary_button(f"Connect {label}", icon=ft.Icons.FAVORITE_ROUNDED)
 
-    async def refresh_summary():
+    async def refresh_summary(silent: bool = False) -> bool:
+        """Loads today's summary + syncs workouts. Returns True if any real
+        data came back (meaning access was already granted on a past
+        visit). silent=True suppresses the error status text -- used for
+        the on-open auto-check below, so a first-ever visit (nothing
+        granted yet) fails quietly instead of greeting the user with a red
+        error message before they've even tapped Connect."""
         try:
-            summary = await get_today_summary(health)
+            summary = await get_today_summary(health, is_ios)
         except HealthEngineError as exc:
-            status_txt.value = f"Couldn't load data: {exc}"
-            status_txt.color = theme.ERROR
-            return
+            if not silent:
+                status_txt.value = f"Couldn't load data: {exc}"
+                status_txt.color = theme.ERROR
+            return False
 
         tiles = []
         if summary["steps"] is not None:
             tiles.append(theme.macro_tile(f"{summary['steps']:,}", "steps", theme.ACCENT))
+        if summary["distance_m"] is not None:
+            if is_ios:
+                dist_value = f"{summary['distance_m'] / METERS_PER_MILE:,.1f}mi"
+            else:
+                dist_value = f"{summary['distance_m'] / 1000:,.1f}km"
+            tiles.append(theme.macro_tile(dist_value, "distance", theme.SUCCESS))
+        if summary["flights_climbed"] is not None:
+            tiles.append(theme.macro_tile(f"{summary['flights_climbed']:,.0f}", "floors", theme.FAT))
         if summary["active_calories"] is not None:
             tiles.append(theme.macro_tile(f"{summary['active_calories']:,.0f}", "active kcal", theme.PROTEIN))
         if summary["total_calories"] is not None:
@@ -65,12 +83,47 @@ def build_health_view(page: ft.Page, state) -> ft.View:
 
         summary_section.controls = [
             ft.Text("TODAY", size=11, color=theme.TEXT_FAINT, weight="w700"),
+            # No wrap=True here -- macro_tile() sets expand=True on every
+            # tile (wraps it in Flutter's Expanded), and Expanded is only
+            # legal as a direct child of a Flex (Row/Column); wrap=True
+            # turns this Row into a Wrap, which isn't one, so it threw a
+            # layout error that rendered as a blank gray box instead of the
+            # tiles. Every other macro_tile() row in the app (e.g.
+            # meal_feed_view.py) already omits wrap for the same reason.
             ft.Row(tiles, spacing=8) if tiles else ft.Text(
                 "No data yet -- log some activity in your Health app, then check back.",
                 size=12, color=theme.TEXT_FAINT, italic=True,
             ),
         ]
-        status_txt.value = ""
+
+        # Also pulls today's workouts (e.g. an Apple Watch workout) into
+        # workout_logs -- same import state.sync_health_workouts drives
+        # from the home screen, surfaced here since this screen is where
+        # the user is actively looking at Health data. Failure here
+        # shouldn't blank out the tiles above, so it's a separate
+        # try/except rather than folded into the block above.
+        try:
+            workouts = await get_today_workouts(health, is_ios)
+            added = state.sync_health_workouts(workouts)
+        except HealthEngineError:
+            added = 0
+        status_txt.color = theme.TEXT_MUTED
+        status_txt.value = f"Synced {added} workout{'s' if added != 1 else ''} from {label}." if added else ""
+        return True
+
+    async def _load_if_already_connected():
+        # Runs once on every visit to this screen, before the user touches
+        # anything. If access was already granted on a previous visit, this
+        # loads the data straight away and hides the Connect button --
+        # otherwise HealthKit auth doesn't persist across app.py's view
+        # rebuilds the way state.py's own caches do, since every visit to
+        # /health starts a brand new view with a fresh, unconnected-looking
+        # default state even though the OS-level permission is still valid.
+        if await refresh_summary(silent=True):
+            connect_button.visible = False
+            page.update()
+
+    page.run_task(_load_if_already_connected)
 
     async def on_connect(e):
         connect_button.disabled = True
@@ -79,7 +132,7 @@ def build_health_view(page: ft.Page, state) -> ft.View:
         page.update()
 
         try:
-            granted = await request_permission(health)
+            granted = await request_permission(health, is_ios)
         except HealthEngineError as exc:
             status_txt.value = f"Couldn't request access: {exc}"
             status_txt.color = theme.ERROR
@@ -101,8 +154,9 @@ def build_health_view(page: ft.Page, state) -> ft.View:
     connect_button.on_click = lambda e: page.run_task(on_connect, e)
 
     explanation = ft.Text(
-        f"Bite reads your steps, calories burned, and workouts from {label} to show "
-        "them here. Read-only -- nothing is ever written back.",
+        f"Bite! reads your steps, distance, flights climbed, calories burned, and "
+        f"workouts from {label} to show them here. Read-only -- nothing is ever "
+        "written back.",
         size=12, color=theme.TEXT_MUTED,
     )
 

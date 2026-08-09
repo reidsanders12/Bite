@@ -1,4 +1,4 @@
-"""Shared design tokens for Bite's warm, editorial UI.
+"""Shared design tokens for Bite!'s warm, editorial UI.
 
 Every view should import its colors from here instead of hardcoding hex
 strings, so the whole app reads as one consistent design instead of a
@@ -106,6 +106,20 @@ def build_theme() -> ft.Theme:
             color=BG_SURFACE,
             shape=ft.RoundedRectangleBorder(radius=RADIUS_MD),
         ),
+        # Fully invisible AND non-interactive -- ScrollMode alone can't
+        # express this (HIDDEN hides the thumb graphic but Flutter's
+        # Scrollbar still reserves an interactive drag-track region at the
+        # edge; ADAPTIVE just shows a visible bar on some platforms). This
+        # is the actual switch for both: thumb/track never draw, and the
+        # scrollbar widget stops intercepting touches near the edge, so a
+        # thumb resting there behaves like normal content, not a scroll
+        # track. Scrolling itself still works fine via ordinary drag
+        # anywhere in the content -- this only turns off the bar widget.
+        scrollbar_theme=ft.ScrollbarTheme(
+            thumb_visibility=False,
+            track_visibility=False,
+            interactive=False,
+        ),
     )
 
 
@@ -175,6 +189,32 @@ def macro_tile(value: str, label: str, color: str) -> ft.Container:
         padding=ft.padding.symmetric(vertical=10, horizontal=8),
         expand=True,
         alignment=ft.alignment.center,
+    )
+
+
+def ai_disclaimer(text: str = "AI estimate -- not medical or nutrition advice.") -> ft.Text:
+    """Small caption for anywhere an AI-generated calorie/macro/workout
+    estimate is shown to the user (confirm_view.py, post_meal_view.py,
+    log_workout_view.py, coach_view.py) -- these are Gemini's best guess
+    from a photo/description, not a verified nutritional analysis."""
+    return ft.Text(text, size=11, color=TEXT_FAINT, italic=True)
+
+
+def sponsored_badge() -> ft.Container:
+    """Structural 'Sponsored' pill for a paid-partnership Meal Feed post --
+    driven entirely by meal_posts.is_sponsored (see the SQL migration), not
+    optional caption text, so it can't be omitted by mistake once sponsor
+    posts have a write path."""
+    return ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.CAMPAIGN_ROUNDED, size=12, color=ACCENT),
+                ft.Text("Sponsored", size=11, weight="bold", color=ACCENT),
+            ],
+            spacing=4, tight=True,
+        ),
+        bgcolor=BG_SURFACE_ALT, border_radius=100,
+        padding=ft.padding.symmetric(horizontal=10, vertical=5),
     )
 
 

@@ -25,11 +25,22 @@ class Database:
 
     # --- AUTH MODULE INTERFACES ---
 
-    def sign_up_user(self, email: str, password: str, full_name: Optional[str] = None):
-        """Registers a brand new account identity within the Supabase Auth cluster."""
+    def sign_up_user(self, email: str, password: str, full_name: Optional[str] = None, age: Optional[int] = None):
+        """Registers a brand new account identity within the Supabase Auth cluster.
+
+        `age` is stored as `signup_age` in user_metadata -- self-attested at
+        registration, per app/age_gate.py, which the caller (auth_view.py)
+        must already have validated against MIN_ACCOUNT_AGE before this is
+        ever called, since no account should be created at all below that
+        floor."""
         payload = {"email": email, "password": password}
+        data = {}
         if full_name:
-            payload["options"] = {"data": {"full_name": full_name}}
+            data["full_name"] = full_name
+        if age is not None:
+            data["signup_age"] = age
+        if data:
+            payload["options"] = {"data": data}
         return self.client.auth.sign_up(payload)
 
     def sign_in_user(self, email: str, password: str):
@@ -479,11 +490,19 @@ class Database:
         except Exception as e:
             logger.error(f"Failed to leave circle: {e}")
 
-    def check_in(self, circle_id: int) -> None:
-        """Records that the caller met their circle's goal today (idempotent per day)."""
+    def check_in(self, circle_id: int) -> tuple[bool, str]:
+        """Records that the caller met their circle's goal today (idempotent
+        per day). Returns (success, error_message) -- a duplicate-key error
+        (today's row already exists, per the unique (circle_id, user_id,
+        checkin_date) constraint) counts as success since the end state is
+        exactly what the caller wanted. Any other failure (RLS denial,
+        network, etc.) used to be swallowed silently here, which is exactly
+        why a real failure looked identical to a successful check-in on
+        screen -- surfacing it now so the UI can show the user why nothing
+        changed instead of nothing happening at all."""
         uid = self.get_current_user_id()
         if not uid:
-            return
+            return False, "No active user session."
 
         try:
             self.client.table("circle_checkins").insert({
@@ -491,11 +510,42 @@ class Database:
                 "user_id": uid,
                 "checkin_date": date.today().isoformat(),
             }).execute()
+            return True, ""
         except Exception as e:
-            # Expected (and harmless) once today's row already exists --
-            # the unique (circle_id, user_id, checkin_date) constraint blocks
-            # a duplicate check-in for the same day.
-            logger.error(f"Check-in not recorded (likely already checked in today): {e}")
+            if "duplicate key" in str(e).lower() or "23505" in str(e):
+                return True, ""
+            logger.error(f"Check-in failed: {e}")
+            return False, "Couldn't check in -- please try again."
+
+    def undo_check_in(self, circle_id: int) -> tuple[bool, str]:
+        """Reverses today's check-in for the caller (e.g. an accidental
+        tap). The UI only ever calls this when it already believes today's
+        check-in exists, so unlike check_in()'s duplicate-key idempotency,
+        0 rows actually deleted here means something's wrong (most likely:
+        the circle_checkins_delete_own RLS policy from the workout-import
+        migration block hasn't been run yet) rather than "already undone" --
+        see delete_workout_log for the same response.data-over-exception
+        reasoning."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+
+        try:
+            response = (
+                self.client.table("circle_checkins")
+                .delete()
+                .eq("circle_id", circle_id)
+                .eq("user_id", uid)
+                .eq("checkin_date", date.today().isoformat())
+                .execute()
+            )
+            if not response.data:
+                logger.error("Undo check-in was blocked (0 rows affected) -- check the DELETE RLS policy on circle_checkins.")
+                return False, "Couldn't undo check-in -- please try again."
+            return True, ""
+        except Exception as e:
+            logger.error(f"Undo check-in failed: {e}")
+            return False, "Couldn't undo check-in -- please try again."
 
     def get_circle_status(self, circle_id: int) -> List[CircleMemberStatus]:
         """Returns every member's today/streak status for one circle.
@@ -566,6 +616,46 @@ class Database:
             }).execute()
         except Exception as e:
             logger.error(f"Failed to log workout: {e}")
+
+    def import_health_workouts(self, workouts: List[dict]) -> int:
+        """Bulk-upserts Apple Health / Health Connect workouts (see
+        app.health_engine.get_today_workouts) into the same workout_logs
+        table a manual entry lands in. Each dict needs name/duration_minutes/
+        calories_burned/external_id/source. Upserts on (user_id,
+        external_id) with ignore_duplicates=True -- Postgres's ON CONFLICT
+        DO NOTHING -- so re-running the sync (every home screen load) only
+        ever inserts workouts it hasn't seen before; only ever-inserted rows
+        come back, so len(response.data) is exactly the newly-added count.
+        """
+        uid = self.get_current_user_id()
+        if not uid or not workouts:
+            return 0
+
+        rows = [
+            {
+                "user_id": uid,
+                "workout_name": w["name"],
+                "duration_minutes": w.get("duration_minutes"),
+                "calories_burned": w.get("calories_burned"),
+                "source": w.get("source", "apple_health"),
+                "external_id": w["external_id"],
+            }
+            for w in workouts
+            if w.get("external_id")
+        ]
+        if not rows:
+            return 0
+
+        try:
+            response = (
+                self.client.table("workout_logs")
+                .upsert(rows, on_conflict="user_id,external_id", ignore_duplicates=True)
+                .execute()
+            )
+            return len(response.data or [])
+        except Exception as e:
+            logger.error(f"Failed to import Health workouts: {e}")
+            return 0
 
     def get_workout_logs_for_date(self, date_iso: str) -> List[dict]:
         """Fetches the caller's workout entries created on the given local date."""
@@ -787,17 +877,19 @@ class Database:
         calories: Optional[int] = None, protein: Optional[int] = None,
         carbs: Optional[int] = None, fat: Optional[int] = None,
         meal_name: Optional[str] = None, ingredients: Optional[str] = None,
-    ) -> tuple[bool, str]:
+    ) -> tuple[Optional[int], str]:
         """Creates a meal post. RLS (meal_posts_insert_own) re-checks that a
         'circle' post's circle_id is actually one the caller belongs to.
         Macro, meal_name, and ingredients fields are all optional -- a post
-        can be photo-only."""
+        can be photo-only. Returns the new post's id (or None on failure) --
+        callers need it to auto-flag the post right after creation (see
+        state.py's post_meal)."""
         uid = self.get_current_user_id()
         if not uid:
-            return False, "No active user session."
+            return None, "No active user session."
 
         try:
-            self.client.table("meal_posts").insert({
+            response = self.client.table("meal_posts").insert({
                 "user_id": uid,
                 "display_name": display_name,
                 "photo_url": photo_url,
@@ -810,11 +902,16 @@ class Database:
                 "protein": protein,
                 "carbs": carbs,
                 "fat": fat,
+                # No write path sets these true yet -- see the
+                # meal_posts_sponsored_requires_sponsor migration comment.
+                "is_sponsored": False,
+                "sponsor_id": None,
             }).execute()
-            return True, ""
+            post_id = response.data[0]["id"] if response.data else None
+            return post_id, ""
         except Exception as e:
             logger.error(f"Failed to create meal post: {e}")
-            return False, "Something went wrong -- please try again."
+            return None, "Something went wrong -- please try again."
 
     def get_meal_feed(self) -> List[dict]:
         """Fetches every meal post visible to the caller -- their own
@@ -960,7 +1057,7 @@ class Database:
             logger.error(f"Failed to unblock user: {e}")
             return False, "Something went wrong -- please try again."
 
-    def report_meal_post(self, post_id: int, reason: str) -> tuple[bool, str]:
+    def report_meal_post(self, post_id: int, reason: str, category: str = "other") -> tuple[bool, str]:
         """Flags a post for admin review. meal_post_reports_insert_own RLS
         re-checks the post is one the caller can actually see."""
         uid = self.get_current_user_id()
@@ -969,12 +1066,61 @@ class Database:
 
         try:
             self.client.table("meal_post_reports").insert({
-                "post_id": post_id, "reporter_id": uid, "reason": (reason or "").strip() or None,
+                "post_id": post_id, "reporter_id": uid,
+                "reason": (reason or "").strip() or None,
+                "category": category,
             }).execute()
+            self.log_moderation_action(
+                actor_id=uid, action_type="flag_report",
+                target_post_id=post_id, reason=f"[{category}] {reason}",
+            )
             return True, ""
         except Exception as e:
             logger.error(f"Failed to report meal post: {e}")
             return False, "Something went wrong -- please try again."
+
+    def auto_flag_post(self, post_id: int, category: str, reason: str) -> None:
+        """Files an automated report against the caller's own just-created
+        post when app/moderation.py's ed_screening_flags() matches its text
+        -- never blocks or deletes the post (see that module's docstring for
+        why), just routes it into the same human-review queue as a user
+        report (reported_posts_view.py). reporter_id is the post's own
+        author -- this app has no service-role write path, so the flag has
+        to come from whichever authenticated client triggered it, same
+        constraint documented on moderation_actions_insert_self in the SQL
+        migration."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return
+        try:
+            self.client.table("meal_post_reports").insert({
+                "post_id": post_id, "reporter_id": uid,
+                "reason": reason, "category": category, "is_automated": True,
+            }).execute()
+            self.log_moderation_action(
+                actor_id=uid, action_type="flag_auto",
+                target_post_id=post_id, reason=reason,
+            )
+        except Exception as e:
+            logger.error(f"Failed to auto-flag meal post: {e}")
+
+    def log_moderation_action(
+        self, actor_id: str, action_type: str, target_post_id: Optional[int] = None,
+        target_user_id: Optional[str] = None, reason: Optional[str] = None,
+    ) -> None:
+        """Appends one row to the moderation_actions audit trail. Best-effort
+        -- a logging failure shouldn't block the moderation action itself,
+        so this only logs its own errors rather than raising."""
+        try:
+            self.client.table("moderation_actions").insert({
+                "actor_id": actor_id,
+                "action_type": action_type,
+                "target_post_id": target_post_id,
+                "target_user_id": target_user_id,
+                "reason": reason,
+            }).execute()
+        except Exception as e:
+            logger.error(f"Failed to log moderation action: {e}")
 
     def get_reported_posts(self) -> List[dict]:
         """Fetches every open report joined with its post, for the admin
@@ -1002,27 +1148,42 @@ class Database:
             logger.error(f"Failed to fetch reported posts: {e}")
             return []
 
-    def dismiss_report(self, report_id: int) -> tuple[bool, str]:
+    def dismiss_report(self, report_id: int, post_id: Optional[int] = None) -> tuple[bool, str]:
         """Resolves a report without deleting the underlying post (e.g. a
         report that turns out to be unfounded). Admin-only, enforced by
-        meal_post_reports_delete_admin RLS."""
+        meal_post_reports_delete_admin RLS. Deleting the report row is the
+        only record of it that ever existed -- moderation_actions is what
+        preserves that history (see the SQL migration's comment on why)."""
+        uid = self.get_current_user_id()
         try:
             response = self.client.table("meal_post_reports").delete().eq("id", report_id).execute()
             if not response.data:
                 return False, "Couldn't dismiss that report -- only the admin account can."
+            if uid:
+                self.log_moderation_action(
+                    actor_id=uid, action_type="dismiss", target_post_id=post_id,
+                    reason=f"Dismissed report #{report_id}",
+                )
             return True, ""
         except Exception as e:
             logger.error(f"Failed to dismiss report: {e}")
             return False, "Something went wrong -- please try again."
 
-    def admin_delete_meal_post(self, post_id: int) -> tuple[bool, str]:
+    def admin_delete_meal_post(self, post_id: int, reason: str = "") -> tuple[bool, str]:
         """Removes a reported post outright. Admin-only (meal_posts_delete_admin
         RLS) -- unlike delete_meal_post, this has no `.eq("user_id", uid)`
         filter, since the whole point is deleting someone *else's* post."""
+        uid = self.get_current_user_id()
         try:
             response = self.client.table("meal_posts").delete().eq("id", post_id).execute()
             if not response.data:
                 return False, "Couldn't delete that post -- only the admin account can."
+            if uid:
+                self.log_moderation_action(
+                    actor_id=uid, action_type="remove_post", target_post_id=post_id,
+                    target_user_id=response.data[0].get("user_id"),
+                    reason=reason or "Removed via Reported Posts queue",
+                )
             return True, ""
         except Exception as e:
             logger.error(f"Failed to admin-delete meal post: {e}")
@@ -1188,7 +1349,7 @@ class Database:
         try:
             existing = (
                 self.client.table("sponsor_redemptions")
-                .select("code, redeemed_at")
+                .select("code, redemption_count, redeemed_at")
                 .eq("sponsor_id", sponsor_id)
                 .eq("user_id", uid)
                 .maybe_single()

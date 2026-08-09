@@ -4,7 +4,8 @@ Profile Account and Macro Targets View.
 import flet as ft
 
 from app import theme
-from app.config import ADMIN_EMAIL, PRIVACY_POLICY_URL
+from app.age_gate import MIN_ACCOUNT_AGE, MIN_FEED_AGE
+from app.config import ADMIN_EMAIL, PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL
 from app.models import UserGoals
 
 LB_PER_KG = 2.20462
@@ -54,6 +55,53 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
     name = getattr(state, "current_user_name", "") or "Bite User"
     email = getattr(state, "current_user_email", "")
     initials = "".join(part[0] for part in name.split()[:2]).upper() or "B"
+
+    # Accounts with no signup_age on file (created before age_gate.py's
+    # registration field existed) are now treated as under-age by
+    # can_access_meal_feed() rather than grandfathered in -- see
+    # age_gate.py's docstring. This is the only way such an account can
+    # ever unlock Meal Feed: self-attested here, same trust model and same
+    # user_metadata field (signup_age) as entering it at registration would
+    # have used.
+    needs_age_confirmation = profile.get("signup_age") is None
+    age_confirm_field = ft.TextField(label="Your age", keyboard_type=ft.KeyboardType.NUMBER, **theme.styled_field())
+    age_confirm_status = ft.Text("", size=12, color=theme.ERROR)
+
+    def rerender_profile() -> None:
+        page.views[-1] = build_profile_view(page, state)
+        page.update()
+
+    def confirm_age(e):
+        raw = (age_confirm_field.value or "").strip()
+        try:
+            age = int(raw)
+        except ValueError:
+            age_confirm_status.value = "Please enter your age as a whole number."
+            page.update()
+            return
+        if age < MIN_ACCOUNT_AGE:
+            age_confirm_status.value = f"Bite! accounts require an age of {MIN_ACCOUNT_AGE}+."
+            page.update()
+            return
+        state.save_profile_data({"signup_age": age})
+        rerender_profile()
+
+    age_confirm_card = theme.surface_card(
+        ft.Column(
+            [
+                ft.Text("Confirm your age", size=14, weight="bold", color=theme.TEXT_PRIMARY),
+                ft.Text(
+                    f"Meal Feed is only available for accounts {MIN_FEED_AGE}+. "
+                    "Confirm your age once to unlock it.",
+                    size=12, color=theme.TEXT_MUTED,
+                ),
+                age_confirm_field,
+                age_confirm_status,
+                theme.primary_button("Confirm", icon=ft.Icons.CHECK, on_click=confirm_age),
+            ],
+            spacing=10,
+        )
+    ) if needs_age_confirmation else ft.Container()
 
     def stat_tile(label: str, value: str, color: str) -> ft.Control:
         value_text = ft.Text(value, size=18, weight="bold", color=color, font_family=theme.DISPLAY_FONT)
@@ -309,6 +357,7 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                     ft.Text(email, size=13, color=theme.TEXT_MUTED) if email else ft.Container(),
 
                     ft.Divider(color=theme.BORDER, height=28),
+                    age_confirm_card,
                     summary_card,
                     bmi_card,
 
@@ -356,6 +405,12 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                         style=ft.ButtonStyle(color=theme.TEXT_MUTED),
                         on_click=lambda _: page.launch_url(PRIVACY_POLICY_URL)
                     ) if PRIVACY_POLICY_URL else ft.Container(),
+                    ft.TextButton(
+                        "Terms of Service",
+                        icon=ft.Icons.DESCRIPTION_OUTLINED,
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                        on_click=lambda _: page.launch_url(TERMS_OF_SERVICE_URL)
+                    ) if TERMS_OF_SERVICE_URL else ft.Container(),
                     ft.TextButton(
                         "Contact Support",
                         icon=ft.Icons.MAIL_OUTLINE_ROUNDED,

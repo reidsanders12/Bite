@@ -4,21 +4,28 @@
 // shows a QR code that encodes a link to *this* function
 // (`{SUPABASE_URL}/functions/v1/redeem-sponsor?code=...`). Sponsor staff
 // scan it with any phone camera -- no Bite account, no app -- and land
-// here. This is the only place `sponsor_redemptions.redeemed_at` ever gets
-// written (see supabase_circles_schema.sql: there's deliberately no update
-// policy for authenticated users), so a redemption count sponsors are
-// shown actually reflects someone scanning the code in person, not just a
-// user opening the dialog on their own phone.
+// here. This is the only place `sponsor_redemptions.redemption_count`
+// ever gets written, via the redeem_sponsor_code() RPC (SECURITY DEFINER,
+// see supabase_circles_schema.sql -- there's deliberately no update policy
+// for authenticated users on that table), so a redemption count sponsors
+// are shown actually reflects someone scanning the code in person, not
+// just a user opening the dialog on their own phone. The RPC also takes a
+// row lock (`for update`) while it checks the count, so two near-
+// simultaneous scans of the same code can't both slip past
+// sponsors.max_redemptions_per_user.
 //
-// Public by design: deploy with `--no-verify-jwt` (unlike gemini-proxy/
-// delete-account, which require a live session) since staff have no Bite
-// login to present. `code` is a long random token (see
-// app/database.py's create_sponsor_redemption), so this is the same
-// "unguessable capability URL" trust model as an emailed unsubscribe link
-// -- not a security boundary, just enough friction that no one stumbles
-// into it by accident.
+// Public by design: verify_jwt is turned off for this function alone (see
+// supabase/config.toml) -- unlike gemini-proxy/delete-account, which
+// require a live session -- since staff have no Bite login to present.
+// `code` is a long random token (see app/database.py's
+// get_or_create_sponsor_redemption), so this is the same "unguessable
+// capability URL" trust model as an emailed unsubscribe link -- not a
+// security boundary, just enough friction that no one stumbles into it by
+// accident.
 //
-// Deploy: supabase functions deploy redeem-sponsor --no-verify-jwt
+// Deploy: supabase functions deploy redeem-sponsor
+// (config.toml's [functions.redeem-sponsor] verify_jwt=false covers the
+// --no-verify-jwt flag automatically -- no need to pass it by hand.)
 
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
@@ -61,6 +68,15 @@ function htmlPage(heading: string, body: string, tone: "ok" | "warn" | "error"):
   });
 }
 
+interface RedeemResult {
+  outcome: "ok" | "limit_reached";
+  sponsor_title: string;
+  sponsor_subtitle: string;
+  redemption_count: number;
+  max_redemptions_per_user: number | null;
+  redeemed_at: string;
+}
+
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   const code = (url.searchParams.get("code") ?? "").trim();
@@ -71,44 +87,30 @@ Deno.serve(async (req) => {
 
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-  const { data: redemption, error: fetchErr } = await admin
-    .from("sponsor_redemptions")
-    .select("id, redeemed_at, sponsors(title, subtitle)")
-    .eq("code", code)
-    .maybeSingle();
+  const { data, error } = await admin.rpc("redeem_sponsor_code", { p_code: code });
 
-  if (fetchErr) {
-    console.error("[redeem-sponsor] lookup failed:", fetchErr);
+  if (error) {
+    console.error("[redeem-sponsor] redeem_sponsor_code failed:", error);
     return htmlPage("Something went wrong", "Please try scanning again.", "error");
   }
-  if (!redemption) {
+
+  const result = (data as RedeemResult[] | null)?.[0];
+  if (!result) {
     return htmlPage("Invalid code", "This redemption code doesn't match any offer.", "error");
   }
 
-  const sponsor = redemption.sponsors as unknown as { title: string; subtitle: string } | null;
-  const offerLine = sponsor
-    ? `${escapeHtml(sponsor.title)} — ${escapeHtml(sponsor.subtitle)}`
-    : "This offer";
+  const offerLine = `${escapeHtml(result.sponsor_title)} — ${escapeHtml(result.sponsor_subtitle)}`;
+  const usageLine = result.max_redemptions_per_user != null
+    ? `Used ${result.redemption_count} of ${result.max_redemptions_per_user}.`
+    : `Used ${result.redemption_count} time${result.redemption_count === 1 ? "" : "s"}.`;
 
-  if (redemption.redeemed_at) {
-    const when = new Date(redemption.redeemed_at as string).toLocaleString();
+  if (result.outcome === "limit_reached") {
     return htmlPage(
-      "Already redeemed",
-      `${offerLine}<br>First redeemed ${escapeHtml(when)}.`,
+      "Redemption limit reached",
+      `${offerLine}<br>${escapeHtml(usageLine)}`,
       "warn",
     );
   }
 
-  const { error: updateErr } = await admin
-    .from("sponsor_redemptions")
-    .update({ redeemed_at: new Date().toISOString() })
-    .eq("id", redemption.id)
-    .is("redeemed_at", null);
-
-  if (updateErr) {
-    console.error("[redeem-sponsor] update failed:", updateErr);
-    return htmlPage("Something went wrong", "Please try scanning again.", "error");
-  }
-
-  return htmlPage("Valid — redeemed just now", offerLine, "ok");
+  return htmlPage("Valid — redeemed just now", `${offerLine}<br>${escapeHtml(usageLine)}`, "ok");
 });

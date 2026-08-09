@@ -1,10 +1,10 @@
 <!--
-  Bite -- "Confirm signup" email template.
+  Bite! -- "Confirm signup" email template.
 
   Paste this into: Supabase Dashboard -> Authentication -> Emails ->
   Templates -> "Confirm signup" -> Message body (source/HTML view).
   Subject line is set separately in that same screen -- suggested:
-    Confirm your email for Bite
+    Confirm your email for Bite!
 
   Uses Supabase's built-in template variables: {{ .ConfirmationURL }} and
   {{ .Email }}. Table-based layout + inline styles on purpose -- email
@@ -31,7 +31,7 @@
 
             <!-- Body copy -->
             <p style="margin:0 0 28px 0; font-size:15px; line-height:1.6; color:#75695A;">
-              Tap the button below to verify <strong style="color:#2B2622;">{{ .Email }}</strong> and finish setting up your Bite account.
+              Tap the button below to verify <strong style="color:#2B2622;">{{ .Email }}</strong> and finish setting up your Bite! account.
             </p>
 
             <!-- CTA button -->
@@ -57,7 +57,7 @@
         <tr>
           <td style="padding:20px 32px; border-top:1px solid #E4D9C7;">
             <p style="margin:0; font-size:12px; line-height:1.6; color:#A79880;">
-              If you didn't create a Bite account, you can safely ignore this email.
+              If you didn't create a Bite! account, you can safely ignore this email.
             </p>
           </td>
         </tr>

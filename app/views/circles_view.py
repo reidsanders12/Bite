@@ -192,10 +192,21 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
         else:
             show_status(f"Couldn't join: {err}", ok=False)
 
-    def make_checkin_handler(circle_id):
+    def make_checkin_handler(circle_id, was_checked_in):
+        # Toggles rather than only ever checking in -- an accidental tap
+        # used to be permanent (disabled=already_checked_in, no way back)
+        # until undo_checkin_circle existed.
         def handler(e):
-            state.check_in_circle(circle_id)
-            rerender()
+            if was_checked_in:
+                success, err = state.undo_checkin_circle(circle_id)
+                verb = "undo check-in"
+            else:
+                success, err = state.check_in_circle(circle_id)
+                verb = "check in"
+            if success:
+                rerender()
+            else:
+                show_status(f"Couldn't {verb}: {err}", ok=False)
         return handler
 
     def make_leave_handler(circle_id):
@@ -306,10 +317,9 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
                             ft.Column(member_rows, spacing=8) if member_rows else ft.Container(),
                             ft.Text(f"Invite code: {circle.invite_code}", size=11, color=theme.TEXT_FAINT),
                             theme.primary_button(
-                                "Checked in for today" if already_checked_in else "Mark today's goal done",
-                                icon=ft.Icons.CHECK,
-                                on_click=make_checkin_handler(circle.id),
-                                disabled=already_checked_in,
+                                "Checked in -- tap to undo" if already_checked_in else "Mark today's goal done",
+                                icon=ft.Icons.UNDO if already_checked_in else ft.Icons.CHECK,
+                                on_click=make_checkin_handler(circle.id, already_checked_in),
                             ) if not is_auto else ft.Text(
                                 "Checked in for today" if already_checked_in else "Not yet today -- checks in automatically",
                                 size=12, color=theme.SUCCESS if already_checked_in else theme.TEXT_FAINT,

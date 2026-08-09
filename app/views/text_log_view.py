@@ -14,6 +14,7 @@ FilePicker), so the mic button is disabled there with an explanatory
 tooltip instead of silently doing nothing.
 """
 
+import asyncio
 import os
 import tempfile
 
@@ -135,7 +136,14 @@ def build_text_log_view(page: ft.Page, state: AppState) -> ft.View:
         os.close(fd)
         recording_path["value"] = path
 
-        started = audio_recorder.start_recording(output_path=path)
+        # start_recording() is a synchronous method that blocks on
+        # threading.Event.wait() internally, waiting for the platform's
+        # response -- called directly from this async handler, that wait
+        # blocks the very event loop thread that needs to run to process
+        # that response, so it always stalls until it times out. Running it
+        # in a worker thread via asyncio.to_thread frees the event loop to
+        # actually deliver the result.
+        started = await asyncio.to_thread(audio_recorder.start_recording, output_path=path)
         if not started:
             status_area.content = error_banner("Couldn't start recording -- try again.")
             page.update()

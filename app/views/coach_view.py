@@ -411,6 +411,10 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
         controls=[
             theme.app_bar("AI Coach", on_back=lambda e: page.go("/")),
             ft.Container(
+                content=theme.ai_disclaimer("AI-generated suggestions -- not medical or nutrition advice."),
+                padding=ft.padding.only(left=20, right=20, top=4),
+            ),
+            ft.Container(
                 expand=True,
                 padding=20,
                 content=ft.Column(

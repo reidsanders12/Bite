@@ -17,6 +17,29 @@ from app.camera_engine import BLANK_FRAME_B64, CameraEngine
 
 camera_manager = CameraEngine()
 
+# Placeholder resource -- confirm the exact org/hotline/wording with product
+# before shipping. Shown (not blocking, not shaming) whenever a post's own
+# text trips app/moderation.py's ed_screening_flags(); the post has already
+# been shared and queued for human review by the time this shows.
+_SUPPORT_RESOURCE_TEXT = (
+    "Your post is live. If you're struggling with food or your body image, support is "
+    "available any time -- the National Eating Disorders Association (NEDA) Helpline: "
+    "call/text 1-800-931-2237."
+)
+
+
+def _show_support_dialog(page: ft.Page) -> None:
+    dialog = ft.AlertDialog(modal=True)
+
+    def close(e):
+        page.close(dialog)
+        page.go("/meal_feed")
+
+    dialog.title = ft.Text("Get support")
+    dialog.content = ft.Text(_SUPPORT_RESOURCE_TEXT, size=13)
+    dialog.actions = [ft.TextButton("Close", on_click=close)]
+    page.open(dialog)
+
 
 def build_post_meal_view(page: ft.Page, state) -> ft.View:
     if hasattr(state, "refresh_circles"):
@@ -167,7 +190,7 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
     review_section = ft.Column(
         [
             title_field, ingredients_field,
-            macros_header, macros_row, analyze_status,
+            macros_header, macros_row, analyze_status, theme.ai_disclaimer(),
             caption_field, visibility_toggle, show_name_row, circle_dropdown,
         ],
         spacing=14, visible=False,
@@ -240,7 +263,7 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         page.update()
 
         show_name = True if visibility == "circle" else bool(show_name_switch.value)
-        success, err = state.post_meal(
+        success, err, was_flagged = state.post_meal(
             captured_bytes["value"], (caption_field.value or "").strip(), visibility, circle_id,
             _parse_macro(calories_field.value), _parse_macro(protein_field.value),
             _parse_macro(carbs_field.value), _parse_macro(fat_field.value),
@@ -248,7 +271,10 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
             (title_field.value or "").strip(), (ingredients_field.value or "").strip(),
         )
         if success:
-            page.go("/meal_feed")
+            if was_flagged:
+                _show_support_dialog(page)
+            else:
+                page.go("/meal_feed")
         else:
             status_txt.value = f"Couldn't share: {err}"
             status_txt.color = theme.ERROR

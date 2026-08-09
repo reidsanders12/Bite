@@ -11,8 +11,44 @@ description = "Frictionless AI photo logging for calories and macros"
 requires-python = ">=3.12"
 
 [tool.flet]
-product = "Bite"
-org = "com.bite"
+product = "Bite!"
+# Matches the App ID actually registered in the Apple Developer portal
+# (com.foodbite.bite) -- "com.bite.bite" was the original intent but that
+# namespace was already taken by another developer, so this must stay
+# "com.foodbite" for iOS signing to find the right provisioning profile.
+org = "com.foodbite"
+
+# Without this, `flet build` zips up the ENTIRE project directory as "the
+# app" -- the default exclude list is just ["build"]. That was quietly
+# shipping the full .venv (hundreds of MB) and .git history inside every
+# build's app.zip, extractable by anyone who unzips a downloaded .ipa/.apk.
+# None of these are needed at runtime.
+#
+# .env is deliberately NOT excluded here even though it's real config --
+# app/config.py hard-requires it to load SUPABASE_URL/SUPABASE_ANON_KEY at
+# startup (raises and refuses to boot without them) and there's currently
+# no other way for a packaged build to get those values, so excluding it
+# would crash every launch. SUPABASE_ANON_KEY shipping in a client build is
+# expected/by-design for Supabase (access is controlled by RLS policies,
+# not by keeping that key secret) -- USDA_API_KEY and ADMIN_EMAIL riding
+# along in the same file is unnecessary but low-stakes (a free-tier lookup
+# key and an email address, not a credential with write access). Worth a
+# follow-up to make config.py treat .env as optional and bake in just the
+# two Supabase values, so .env itself can be excluded -- not done here to
+# avoid breaking the build we're mid-shipping.
+#
+# NOTE: this table (and any [tool.flet.*] table) must stay BELOW every
+# bare key=value line that belongs to plain [tool.flet] (product, org,
+# etc.) -- TOML scopes those to whichever table header appears above them,
+# so org/product placed after [tool.flet.app] would silently become
+# tool.flet.app.org instead of tool.flet.org. That exact bug happened here
+# once already.
+[tool.flet.app]
+exclude = [
+    ".venv", ".git", ".github", ".gitignore",
+    ".pytest_cache", "__pycache__", ".DS_Store",
+    "bite_tracker.db", "kickbacks-v2.vsix", "tests", "scripts",
+]
 
 # Cross-platform permissions `flet build apk|ipa|macos` should always bake
 # in -- without these, a compiled build (unlike `flet run`) has no
@@ -37,17 +73,19 @@ dark_color = "#FAF3EA"
 # with a string that says what the camera/mic are actually *for*, not just
 # that the app uses them.
 #
-# ITSAppUsesNonExemptEncryption=false: Bite only uses standard HTTPS/TLS
+# ITSAppUsesNonExemptEncryption=false: Bite! only uses standard HTTPS/TLS
 # (exempt encryption), so this skips the export-compliance question App
 # Store Connect would otherwise ask on every single submission.
 [tool.flet.ios.info]
-NSCameraUsageDescription = "Bite uses your camera to snap photos of meals for AI calorie/macro estimates and to share photos to Meal Feed."
-NSMicrophoneUsageDescription = "Bite uses your microphone to record a voice note that's transcribed into a food log entry."
+NSCameraUsageDescription = "Bite! uses your camera to snap photos of meals for AI calorie/macro estimates and to share photos to Meal Feed."
+NSMicrophoneUsageDescription = "Bite! uses your microphone to record a voice note that's transcribed into a food log entry."
 ITSAppUsesNonExemptEncryption = false
 # Profile -> Connect Health App (app/health_engine.py, flet-health). Read-only:
-# Bite never writes to Apple Health, only displays what's already there.
-NSHealthShareUsageDescription = "Bite reads your steps, calories burned, and workouts from Apple Health to show them in your profile. Bite never writes data back to Apple Health."
-NSHealthUpdateUsageDescription = "Bite reads your steps, calories burned, and workouts from Apple Health to show them in your profile. Bite never writes data back to Apple Health."
+# Bite! never writes to Apple Health, only displays what's already there.
+# Scope is "Activity basics" -- see health_engine.py's module docstring for
+# why heart rate/sleep/vitals are deliberately excluded.
+NSHealthShareUsageDescription = "Bite! reads your steps, distance, flights climbed, calories burned, and workouts from Apple Health to show them in your profile. Bite! never writes data back to Apple Health."
+NSHealthUpdateUsageDescription = "Bite! reads your steps, distance, flights climbed, calories burned, and workouts from Apple Health to show them in your profile. Bite! never writes data back to Apple Health."
 
 # Health Connect requires minSdkVersion 26 (Android 8.0) -- the flet-build-template
 # default (flutter.minSdkVersion, 21) is too low and fails Gradle's manifest
@@ -59,16 +97,22 @@ NSHealthUpdateUsageDescription = "Bite reads your steps, calories burned, and wo
 min_sdk_version = 26
 
 # Health Connect (Android) permissions for the same feature -- scoped to
-# exactly what app/health_engine.py reads (steps, calories, workouts, sleep),
-# not the much longer list flet-health's own README example requests.
-# ACTIVITY_RECOGNITION is required by Health Connect specifically for step
-# data, per flet-health's docs.
+# exactly what app/health_engine.py reads (steps, distance, flights climbed,
+# calories, workouts) -- "Activity basics" only, not the much longer list
+# flet-health's own README example requests, and deliberately no
+# READ_SLEEP/READ_HEART_RATE (see health_engine.py's module docstring for
+# why). ACTIVITY_RECOGNITION is required by Health Connect specifically for
+# step data, per flet-health's docs. READ_DISTANCE maps to
+# HealthDataTypeAndroid.DISTANCE_DELTA, READ_FLOORS_CLIMBED to
+# HealthDataTypeAndroid.FLIGHTS_CLIMBED -- Health Connect's own naming for
+# those two record types differs from the Dart enum member names.
 [tool.flet.android.permission]
 "android.permission.health.READ_STEPS" = true
+"android.permission.health.READ_DISTANCE" = true
+"android.permission.health.READ_FLOORS_CLIMBED" = true
 "android.permission.health.READ_ACTIVE_CALORIES_BURNED" = true
 "android.permission.health.READ_TOTAL_CALORIES_BURNED" = true
 "android.permission.health.READ_EXERCISE" = true
-"android.permission.health.READ_SLEEP" = true
 "android.permission.ACTIVITY_RECOGNITION" = true
 
 # Points `flet build` at a customized fork of flet-dev/flet-build-template

@@ -7,6 +7,7 @@ import logging
 
 import flet as ft
 from app import theme
+from app.age_gate import MIN_ACCOUNT_AGE, is_account_age_allowed
 from app.state import AppState
 
 logger = logging.getLogger(__name__)
@@ -38,9 +39,22 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
         **theme.styled_field(),
     )
 
+    # COPPA account-creation floor (app/age_gate.py) -- self-attested, same
+    # shape as the existing onboarding "age" field, but collected here so a
+    # too-young signup is refused before any account exists at all rather
+    # than after.
+    age_field = ft.TextField(
+        label="Age",
+        hint_text=f"Must be {MIN_ACCOUNT_AGE} or older to create an account",
+        prefix_icon=ft.Icons.CAKE_OUTLINED,
+        keyboard_type=ft.KeyboardType.NUMBER,
+        **theme.styled_field(),
+    )
+
     status_msg = ft.Text("", color=theme.ERROR, size=13, weight="w500", text_align=ft.TextAlign.CENTER)
 
     name_slot = ft.Container(content=None, height=0)
+    age_slot = ft.Container(content=None, height=0)
     primary_btn = theme.primary_button("Sign In", width=float("inf"), height=50)
     toggle_btn = ft.TextButton(style=ft.ButtonStyle(color=theme.TEXT_MUTED))
 
@@ -48,6 +62,8 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
         is_register = mode["value"] == "register"
         name_slot.content = name_field if is_register else None
         name_slot.height = None if is_register else 0
+        age_slot.content = age_field if is_register else None
+        age_slot.height = None if is_register else 0
         primary_btn.text = "Create Account" if is_register else "Sign In"
         toggle_btn.text = "Already have an account? Sign in" if is_register else "New here? Create an account"
         status_msg.value = ""
@@ -119,12 +135,30 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
             page.update()
             return
 
+        age_raw = (age_field.value or "").strip()
+        try:
+            age = int(age_raw)
+        except ValueError:
+            age = None
+        if age is None or age <= 0:
+            status_msg.value = "Please enter your age."
+            status_msg.color = theme.ERROR
+            page.update()
+            return
+        # Refused here, before sign_up_user is ever called -- no account is
+        # created for an under-13 signup. See app/age_gate.py.
+        if not is_account_age_allowed(age):
+            status_msg.value = f"You must be at least {MIN_ACCOUNT_AGE} years old to create a Bite! account."
+            status_msg.color = theme.ERROR
+            page.update()
+            return
+
         status_msg.value = "Creating your account..."
         status_msg.color = theme.TEXT_MUTED
         page.update()
 
         try:
-            response = state.db.sign_up_user(email, password, full_name=name)
+            response = state.db.sign_up_user(email, password, full_name=name, age=age)
 
             if not (response and response.user):
                 raise Exception("We couldn't create your account. Please try again.")
@@ -195,7 +229,7 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                         brand_icon,
                         ft.Divider(color="transparent", height=8),
                         ft.Text(
-                            "Bite",
+                            "Bite!",
                             size=30,
                             weight="bold",
                             color=theme.TEXT_PRIMARY,
@@ -214,6 +248,7 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                     ft.Container(
                         content=ft.Column([
                             name_slot,
+                            age_slot,
                             email_field,
                             password_field,
                         ], spacing=16),

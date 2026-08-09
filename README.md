@@ -1,4 +1,4 @@
-# Bite — Frictionless AI Photo Logging
+# Bite! — Frictionless AI Photo Logging
 
 An AI-powered calorie/macro tracker. Snap a photo of your food (or type a
 sentence describing it) and Gemini returns a structured calorie/macro
@@ -170,14 +170,14 @@ Sponsors go through a submit-then-approve flow, not direct table edits:
    Fill in its `SUPABASE_URL`/`SUPABASE_ANON_KEY` placeholders from your
    `.env`, then host it anywhere static (GitHub Pages, Netlify, or just
    open the file locally) and send the link to whoever you want to sponsor
-   Bite — currently live at
+   Bite! — currently live at
    [bitesponsors.netlify.app](https://bitesponsors.netlify.app). It `POST`s
    straight to Supabase's REST API — the
    `sponsors_insert_public_submission` RLS policy is what actually keeps
    this safe: every submission is forced to land as `status='pending'`,
    `active=false` no matter what the submitter sends, so nothing they
    submit can go live without you reviewing it first.
-2. **Review** — sign into Bite with the email you set as `ADMIN_EMAIL`,
+2. **Review** — sign into Bite! with the email you set as `ADMIN_EMAIL`,
    then go to Profile → **Sponsor Requests** (hidden for every other
    account). It lists every submission grouped by Pending / Approved /
    Rejected, with Approve/Reject buttons on pending ones and an on/off
@@ -200,7 +200,7 @@ up more often; `sponsors_category_exclusive_unique`
 blocks *approving* a second Category Exclusive sponsor in the same category
 — it'll come back as an error on the Approve button instead, telling you to
 turn the existing one off first. Note this exclusivity is app-wide, not
-per-region — Bite doesn't collect per-user location data yet, so "in their
+per-region — Bite! doesn't collect per-user location data yet, so "in their
 area" isn't enforceable until it does.
 
 **Gold's native integration** — an approved Gold sponsor gets a "Manage
@@ -223,7 +223,7 @@ screen isn't empty out of the box.
 
 ## App Store / Play Store compliance
 
-Meal Feed made Bite a "user-generated content" app the moment it shipped
+Meal Feed made Bite! a "user-generated content" app the moment it shipped
 (public photo posts other users can see), which pulls in a specific set of
 Apple (Guideline 1.2, Safety — User Generated Content) and Google Play
 (User Generated Content policy) requirements. What's handled in code vs.
@@ -253,7 +253,7 @@ what's still on you before submitting:
   requestable without the app installed) — [`account_deletion.html`](account_deletion.html).
 - **iOS Info.plist** — `pyproject.toml`'s `[tool.flet.ios.info]` sets
   specific camera/microphone usage strings (rather than flet's generic
-  defaults) and `ITSAppUsesNonExemptEncryption = false` (Bite only uses
+  defaults) and `ITSAppUsesNonExemptEncryption = false` (Bite! only uses
   standard HTTPS/TLS, so this skips the export-compliance question App
   Store Connect would otherwise ask on every submission).
 

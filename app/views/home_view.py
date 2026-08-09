@@ -1,18 +1,20 @@
 """
 Main Home Dashboard View - Modern Minimalist Edition.
 """
-import random
-
 import flet as ft
 from app import promotions
 from app import qr_engine
 from app import theme
 from app.config import SUPABASE_URL
+from app.health_engine import get_health_control, get_today_summary, get_today_workouts
 from app.state import AppState
 
-# Relative odds a sponsor's promo is the one picked on any given home load --
-# higher tiers show up more often. Category Exclusive sits above Gold since
-# it's the only voice in its whole category, not just a bigger rotation share.
+METERS_PER_MILE = 1609.344
+
+# Sort weight for the sponsor grid -- higher tiers sort first (top-left,
+# most visible position) since Gold/Category Exclusive sponsors are paying
+# for prominence, not just an equal spot in the grid. Category Exclusive
+# sits above Gold since it's the only voice in its whole category.
 _SPONSOR_LEVEL_WEIGHTS = {"bronze": 1, "silver": 2, "gold": 4, "category_exclusive": 5}
 
 def build_home_view(page: ft.Page, state: AppState) -> ft.View:
@@ -33,6 +35,69 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         # page.go("/") to redraw a route we're already on.
         page.views[-1] = build_home_view(page, state)
         page.update()
+
+    # Populated (if Health access was already granted on a previous visit)
+    # by _sync_health_data below, once its background fetch resolves --
+    # empty/invisible until then, never a static section like the ones
+    # built synchronously further down, since Health data is only
+    # available via an async call.
+    health_section = ft.Column(
+        [
+            ft.Text("TODAY'S ACTIVITY", size=11, color=theme.TEXT_FAINT, weight="w700"),
+            ft.Row(spacing=8),
+        ],
+        spacing=10, visible=False,
+    )
+
+    async def _sync_health_data() -> None:
+        # Silent, best-effort: pulls today's Apple Health / Health Connect
+        # summary (steps/distance/etc, for health_section above) and any
+        # workouts (e.g. an Apple Watch workout) into the same table a
+        # manually-logged workout lands in -- both without the user needing
+        # to visit Connect Health App at all. Never prompts for permission
+        # (that only happens from the Connect Health App screen) and never
+        # surfaces an error -- if the user hasn't connected yet, or the
+        # read fails, this is a no-op, not a broken home screen.
+        if page.platform not in (ft.PagePlatform.IOS, ft.PagePlatform.ANDROID):
+            return
+        try:
+            health = get_health_control(page, state)
+            is_ios = page.platform == ft.PagePlatform.IOS
+
+            summary = await get_today_summary(health, is_ios)
+            tiles = []
+            if summary["steps"] is not None:
+                tiles.append(theme.macro_tile(f"{summary['steps']:,}", "steps", theme.ACCENT))
+            if summary["distance_m"] is not None:
+                dist = (
+                    f"{summary['distance_m'] / METERS_PER_MILE:,.1f}mi" if is_ios
+                    else f"{summary['distance_m'] / 1000:,.1f}km"
+                )
+                tiles.append(theme.macro_tile(dist, "distance", theme.SUCCESS))
+            if summary["flights_climbed"] is not None:
+                tiles.append(theme.macro_tile(f"{summary['flights_climbed']:,.0f}", "floors", theme.FAT))
+            if summary["active_calories"] is not None:
+                tiles.append(theme.macro_tile(f"{summary['active_calories']:,.0f}", "active kcal", theme.PROTEIN))
+            if tiles:
+                # Direct mutation + page.update() rather than rerender() --
+                # this section doesn't feed into any of the calorie/macro
+                # math computed below, so a full rebuild isn't needed just
+                # to reveal it.
+                health_section.controls[1] = ft.Row(tiles, spacing=8)
+                health_section.visible = True
+                page.update()
+
+            # rerender() re-runs this same sync on its way back in, but
+            # only calls it again when new rows were actually added, so it
+            # settles after at most one extra pass.
+            workouts = await get_today_workouts(health, is_ios)
+            added = state.sync_health_workouts(workouts)
+            if added:
+                rerender()
+        except Exception:
+            pass
+
+    page.run_task(_sync_health_data)
 
     daily_logs = state.get_daily_logs() if hasattr(state, "get_daily_logs") else getattr(state, "logs", [])
     log_streak = state.get_log_streak() if hasattr(state, "get_log_streak") else None
@@ -316,10 +381,21 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
 
         is_auto = circle.goal_type != "custom"
 
-        def make_checkin_handler(circle_id):
+        def make_checkin_handler(circle_id, was_checked_in):
+            # Toggles rather than only ever checking in -- an accidental
+            # tap used to be permanent (disabled=checked_in_today, no way
+            # back) until undo_checkin_circle existed.
             def handler(e):
-                state.check_in_circle(circle_id)
-                rerender()
+                if was_checked_in:
+                    success, err = state.undo_checkin_circle(circle_id)
+                    failure_msg = "Couldn't undo check-in."
+                else:
+                    success, err = state.check_in_circle(circle_id)
+                    failure_msg = "Couldn't check in."
+                if success:
+                    rerender()
+                else:
+                    page.open(ft.SnackBar(ft.Text(err or failure_msg), bgcolor=theme.ERROR))
             return handler
 
         status_icon = ft.Icon(
@@ -329,9 +405,8 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         ) if is_auto else ft.IconButton(
             icon=ft.Icons.CHECK_CIRCLE if checked_in_today else ft.Icons.RADIO_BUTTON_UNCHECKED,
             icon_color=theme.SUCCESS if checked_in_today else theme.TEXT_FAINT,
-            tooltip="Checked in for today" if checked_in_today else "Mark today's goal done",
-            disabled=checked_in_today,
-            on_click=make_checkin_handler(circle.id),
+            tooltip="Tap to undo" if checked_in_today else "Mark today's goal done",
+            on_click=make_checkin_handler(circle.id, checked_in_today),
         )
 
         circle_cards.controls.append(
@@ -353,7 +428,6 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 ),
                 padding=14, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE,
                 border=ft.border.all(1, theme.BORDER), shadow=theme.CARD_SHADOW,
-                on_click=lambda e: page.go("/circles"),
             )
         )
 
@@ -383,107 +457,138 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
 
     # Promotions -- active sponsor rows come from Supabase's `sponsors`
     # table (submitted via sponsor_signup.html, reviewed from Profile ->
-    # Sponsor Requests). One is picked each home load, weighted by tier so
-    # higher levels show up more often -- Gold/Category Exclusive sponsors
-    # are paying for prominence, not just an equal shot in the rotation.
+    # Sponsor Requests). Every active sponsor gets a tile in a grid (not
+    # just one random pick per home load) so the section reads the same
+    # regardless of how many sponsors sign up -- see the detail dialog
+    # below for the Learn More / Redeem actions each tile used to show
+    # inline, which don't fit a square tile.
     sponsors = state.get_sponsors() if hasattr(state, "get_sponsors") else []
-    redeem_dialog = ft.AlertDialog(modal=True)
+    sponsors = sorted(sponsors, key=lambda s: -_SPONSOR_LEVEL_WEIGHTS.get(s.get("level"), 1))
+    sponsor_dialog = ft.AlertDialog(modal=True)
 
-    def open_redeem_dialog(e, sponsor: dict) -> None:
-        redemption, err = state.get_or_create_sponsor_redemption(sponsor.get("id"))
-        if not redemption:
-            page.open(ft.SnackBar(ft.Text(err or "Couldn't generate a redeem code -- try again.")))
-            return
-        redeem_url = f"{SUPABASE_URL}/functions/v1/redeem-sponsor?code={redemption['code']}"
-        qr_b64 = qr_engine.qr_base64(redeem_url)
-        already_used = bool(redemption.get("redeemed_at"))
-        redeem_dialog.title = ft.Text(sponsor.get("title", ""), size=16, weight="bold", color=theme.TEXT_PRIMARY)
-        redeem_dialog.content = ft.Column(
-            [
-                ft.Text(
-                    "Already redeemed -- show staff the code below to confirm." if already_used
-                    else "Show this to staff to redeem:",
-                    size=12, color=theme.TEXT_MUTED, text_align=ft.TextAlign.CENTER,
-                ),
-                ft.Container(
-                    content=ft.Image(src_base64=qr_b64, width=200, height=200),
-                    alignment=ft.alignment.center,
-                    padding=12, bgcolor="#FFFFFF", border_radius=theme.RADIUS_MD,
-                ),
-                ft.Text(redemption["code"], size=18, weight="bold", color=theme.TEXT_PRIMARY, text_align=ft.TextAlign.CENTER),
-            ],
-            tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12,
-        )
-        redeem_dialog.actions = [ft.TextButton("Close", on_click=lambda e: page.close(redeem_dialog))]
-        page.open(redeem_dialog)
-
-    if sponsors:
-        weights = [_SPONSOR_LEVEL_WEIGHTS.get(s.get("level"), 1) for s in sponsors]
-        sponsor = random.choices(sponsors, weights=weights, k=1)[0]
+    def open_sponsor_dialog(e, sponsor: dict) -> None:
         raw_url = (sponsor.get("website_url") or "").strip()
         # Only ever open http(s) links -- defense-in-depth against a
         # malicious/mistaken javascript:, file:, or other unexpected scheme
         # ending up in an approved sponsor row.
         website_url = raw_url if raw_url.lower().startswith(("http://", "https://")) else None
-        promo_card = ft.Container(
-            content=ft.Row(
+
+        def do_redeem(e2):
+            redemption, err = state.get_or_create_sponsor_redemption(sponsor.get("id"))
+            if not redemption:
+                page.close(sponsor_dialog)
+                page.open(ft.SnackBar(ft.Text(err or "Couldn't generate a redeem code -- try again.")))
+                return
+            redeem_url = f"{SUPABASE_URL}/functions/v1/redeem-sponsor?code={redemption['code']}"
+            qr_b64 = qr_engine.qr_base64(redeem_url)
+            # redemption_count only ever moves when staff actually scan the
+            # QR (redeem_sponsor_code() in supabase_circles_schema.sql) --
+            # opening this dialog never bumps it, so this reflects real
+            # usage, not just how many times the user has looked at it.
+            used = redemption.get("redemption_count") or 0
+            max_uses = sponsor.get("max_redemptions_per_user")
+            if used == 0:
+                status_line = "Show this to staff to redeem:"
+            elif max_uses is not None:
+                status_line = f"Used {used} of {max_uses} -- show staff the code below."
+            else:
+                status_line = f"Used {used} time{'s' if used != 1 else ''} -- show staff the code below."
+            sponsor_dialog.content = ft.Column(
                 [
-                    ft.Icon(promotions.icon_for(sponsor.get("icon_name")), size=26, color=theme.ACCENT),
-                    ft.Column(
-                        [
-                            ft.Row(
-                                [
-                                    ft.Text(sponsor.get("sponsor_label", "Sponsored"), size=10, weight="bold", color=theme.TEXT_FAINT),
-                                    theme.sponsor_level_badge(sponsor.get("level")),
-                                ],
-                                spacing=6,
-                            ),
-                            ft.Text(sponsor.get("title", ""), size=14, weight="w600", color=theme.TEXT_PRIMARY),
-                            ft.Text(sponsor.get("subtitle", ""), size=12, color=theme.TEXT_MUTED),
-                        ],
-                        expand=True,
-                        spacing=2,
+                    ft.Text(status_line, size=12, color=theme.TEXT_MUTED, text_align=ft.TextAlign.CENTER),
+                    ft.Container(
+                        content=ft.Image(src_base64=qr_b64, width=200, height=200),
+                        alignment=ft.alignment.center,
+                        padding=12, bgcolor="#FFFFFF", border_radius=theme.RADIUS_MD,
                     ),
-                    ft.Column(
-                        [
-                            ft.TextButton(
-                                content=ft.Text(sponsor.get("cta_text", "Learn More"), size=12, weight="bold", color=theme.ACCENT),
-                                style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=4, vertical=0)),
-                                on_click=(lambda e, url=website_url: page.launch_url(url)) if website_url else None,
-                                disabled=website_url is None,
-                            ),
-                            ft.TextButton(
-                                content=ft.Row(
-                                    [ft.Icon(ft.Icons.QR_CODE_ROUNDED, size=14, color=theme.TEXT_MUTED),
-                                     ft.Text("Redeem", size=12, weight="bold", color=theme.TEXT_MUTED)],
-                                    spacing=4, tight=True,
-                                ),
-                                style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=4, vertical=0)),
-                                on_click=lambda e, s=sponsor: open_redeem_dialog(e, s),
-                            ),
-                        ],
-                        spacing=0, horizontal_alignment=ft.CrossAxisAlignment.END,
-                    ),
+                    ft.Text(redemption["code"], size=18, weight="bold", color=theme.TEXT_PRIMARY, text_align=ft.TextAlign.CENTER),
                 ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            padding=16, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE_ALT,
-            border=ft.border.all(1, theme.BORDER),
+                tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12,
+            )
+            sponsor_dialog.actions = [ft.TextButton("Close", on_click=lambda e3: page.close(sponsor_dialog))]
+            page.update()
+
+        sponsor_dialog.title = ft.Row(
+            [
+                ft.Text(sponsor.get("title", ""), size=16, weight="bold", color=theme.TEXT_PRIMARY, expand=True),
+                theme.sponsor_level_badge(sponsor.get("level")),
+            ],
         )
-    else:
-        promo_card = ft.Container()
+        sponsor_dialog.content = ft.Text(sponsor.get("subtitle", ""), size=13, color=theme.TEXT_MUTED)
+        sponsor_dialog.actions = [
+            ft.TextButton(
+                content=ft.Row(
+                    [ft.Icon(ft.Icons.QR_CODE_ROUNDED, size=14, color=theme.TEXT_MUTED),
+                     ft.Text("Redeem", size=12, weight="bold", color=theme.TEXT_MUTED)],
+                    spacing=4, tight=True,
+                ),
+                on_click=do_redeem,
+            ),
+            ft.TextButton(
+                content=ft.Text(sponsor.get("cta_text", "Learn More"), size=12, weight="bold", color=theme.ACCENT),
+                on_click=(lambda e2, url=website_url: page.launch_url(url)) if website_url else None,
+                disabled=website_url is None,
+            ),
+            ft.TextButton("Close", style=ft.ButtonStyle(color=theme.TEXT_MUTED), on_click=lambda e2: page.close(sponsor_dialog)),
+        ]
+        page.open(sponsor_dialog)
+
+    def sponsor_tile(sponsor: dict) -> ft.Container:
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Icon(promotions.icon_for(sponsor.get("icon_name")), size=22, color=theme.ACCENT),
+                    ft.Text(
+                        sponsor.get("title", ""), size=12, weight="w600", color=theme.TEXT_PRIMARY,
+                        text_align=ft.TextAlign.CENTER, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    theme.sponsor_level_badge(sponsor.get("level")),
+                ],
+                spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                alignment=ft.MainAxisAlignment.CENTER,
+            ),
+            bgcolor=theme.BG_SURFACE_ALT, border_radius=theme.RADIUS_MD,
+            border=ft.border.all(1, theme.BORDER),
+            padding=10, height=110, expand=True, alignment=ft.alignment.center,
+            on_click=lambda e, s=sponsor: open_sponsor_dialog(e, s),
+        )
+
+    # Chunked into rows of 3 rather than ft.Row(wrap=True) -- each tile
+    # uses expand=True to split the row evenly, and Expanded (what
+    # expand=True compiles to) is only legal as a direct child of a Flex
+    # (Row/Column), not a Wrap (what wrap=True compiles to). See the
+    # matching fix in health_view.py for what that mismatch actually does
+    # (renders as a blank error box) when it goes wrong.
+    _SPONSOR_COLS = 3
+    sponsor_rows = [
+        ft.Row(
+            [sponsor_tile(s) for s in sponsors[i:i + _SPONSOR_COLS]],
+            spacing=10,
+        )
+        for i in range(0, len(sponsors), _SPONSOR_COLS)
+    ]
+    promo_card = ft.Column(
+        [
+            ft.Text("OUR SPONSORS", size=11, color=theme.TEXT_FAINT, weight="w700"),
+            ft.Column(sponsor_rows, spacing=10),
+        ],
+        spacing=10,
+    ) if sponsors else ft.Container()
 
     return ft.View(
         route="/",
         bgcolor=theme.BG_CANVAS,
         controls=[
             ft.AppBar(
-                title=ft.Text("Bite Profile", size=18, weight="bold", font_family=theme.DISPLAY_FONT),
+                title=ft.Text("Bite! Profile", size=18, weight="bold", font_family=theme.DISPLAY_FONT),
                 leading=ft.IconButton(icon=ft.Icons.ACCOUNT_CIRCLE_OUTLINED, icon_color=theme.TEXT_MUTED, on_click=lambda _: page.go("/profile")),
                 actions=[
                     ft.IconButton(icon=ft.Icons.CHAT_BUBBLE_OUTLINE_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="AI Coach", on_click=lambda _: page.go("/coach")),
-                    ft.IconButton(icon=ft.Icons.RESTAURANT_MENU_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="Meal Feed", on_click=lambda _: page.go("/meal_feed")),
+                    # Hidden (not just gated at the route) for known-minor
+                    # accounts -- see app/age_gate.py.
+                    ft.IconButton(icon=ft.Icons.RESTAURANT_MENU_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="Meal Feed", on_click=lambda _: page.go("/meal_feed"))
+                    if (not hasattr(state, "can_access_meal_feed") or state.can_access_meal_feed())
+                    else ft.Container(width=0),
                     ft.IconButton(icon=ft.Icons.GROUPS_OUTLINED, icon_color=theme.TEXT_MUTED, tooltip="Friend Circles", on_click=lambda _: page.go("/circles")),
                     ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, icon_color=theme.TEXT_MUTED, tooltip="History", on_click=lambda _: page.go("/history")),
                 ],
@@ -496,30 +601,49 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                     ft.Divider(color="transparent", height=4),
                     logging_shortcuts,
                     ft.Divider(color="transparent", height=4),
+                    # Circles, today's activity (steps/etc), and today's
+                    # workouts are all the same kind of glance-able "how am
+                    # I doing" info -- grouped into one tighter-spaced
+                    # cluster (spacing=20 vs the outer Column's 18, but
+                    # between *these* sections specifically, so they read as
+                    # one block) instead of being spread out at the outer
+                    # Column's full spacing like unrelated sections.
                     ft.Column(
                         [
-                            ft.Text("YOUR CIRCLES", size=11, color=theme.TEXT_FAINT, weight="w700"),
-                            circle_cards,
-                        ],
-                        spacing=10,
-                    ) if circles else ft.Container(),
-                    ft.Column(
-                        [
-                            ft.Row(
+                            ft.Column(
                                 [
-                                    ft.Text("TODAY'S WORKOUTS", size=11, color=theme.TEXT_FAINT, weight="w700", expand=True),
-                                    ft.TextButton(
-                                        "View All",
-                                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
-                                        on_click=lambda e: page.go("/workout_history"),
-                                    ),
+                                    ft.Text("YOUR CIRCLES", size=11, color=theme.TEXT_FAINT, weight="w700"),
+                                    circle_cards,
                                 ],
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            ),
-                            workout_items,
+                                spacing=10,
+                            ) if circles else ft.Container(),
+                            health_section,
+                            ft.Column(
+                                [
+                                    ft.Row(
+                                        [
+                                            ft.Text("TODAY'S WORKOUTS", size=11, color=theme.TEXT_FAINT, weight="w700", expand=True),
+                                            ft.TextButton(
+                                                "View All",
+                                                style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                                                on_click=lambda e: page.go("/workout_history"),
+                                            ),
+                                        ],
+                                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    ),
+                                    workout_items,
+                                ],
+                                spacing=0,
+                            ) if daily_workouts else ft.Container(),
                         ],
-                        spacing=0,
-                    ) if daily_workouts else ft.Container(),
+                        spacing=20,
+                    ) if (circles or daily_workouts) else health_section,
+                    # Sponsor promo moved up here (was after the food log
+                    # timeline below) -- that list has no length cap and
+                    # keeps growing across the day, so a sponsor slot placed
+                    # after it was getting pushed further down with every
+                    # meal logged instead of sitting somewhere reliably seen.
+                    promo_card,
                     ft.Row(
                         [
                             ft.Text("TODAY'S LINEUP", size=11, color=theme.TEXT_FAINT, weight="w700", expand=True),
@@ -528,7 +652,6 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     ),
                     timeline_items,
-                    promo_card,
                 ], spacing=18, scroll=ft.ScrollMode.HIDDEN),
                 padding=ft.padding.symmetric(20, 24), expand=True
             )

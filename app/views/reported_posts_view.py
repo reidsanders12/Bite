@@ -14,6 +14,14 @@ import flet as ft
 
 from app import theme
 
+_CATEGORY_LABELS = {
+    "harassment": "Harassment / bullying",
+    "pro_ed_content": "Pro-eating-disorder content",
+    "copyright": "Copyright / trademark",
+    "spam": "Spam",
+    "other": "Other",
+}
+
 
 def build_reported_posts_view(page: ft.Page, state) -> ft.View:
     if hasattr(state, "refresh_reported_posts"):
@@ -64,6 +72,9 @@ def build_reported_posts_view(page: ft.Page, state) -> ft.View:
             caption = post.get("caption") or ""
             photo_url = post.get("photo_url")
             reason = r.get("reason") or "No reason given"
+            category = r.get("category") or "other"
+            category_label = _CATEGORY_LABELS.get(category, "Other")
+            is_automated = bool(r.get("is_automated"))
 
             report_cards.controls.append(
                 theme.surface_card(
@@ -74,6 +85,17 @@ def build_reported_posts_view(page: ft.Page, state) -> ft.View:
                                     ft.Text(f"Posted by {author}", size=13, weight="bold", color=theme.TEXT_PRIMARY, expand=True),
                                     ft.Text(r.get("created_at", "")[:10], size=11, color=theme.TEXT_FAINT),
                                 ],
+                            ),
+                            ft.Row(
+                                [
+                                    ft.Container(
+                                        content=ft.Text(category_label.upper(), size=10, weight="bold", color=theme.ERROR if category == "pro_ed_content" else theme.ACCENT),
+                                        bgcolor=theme.BG_SURFACE_ALT, border_radius=100,
+                                        padding=ft.padding.symmetric(horizontal=8, vertical=3),
+                                    ),
+                                    ft.Text("Automated screening", size=11, color=theme.TEXT_FAINT, italic=True) if is_automated else ft.Container(),
+                                ],
+                                spacing=8,
                             ),
                             ft.Image(
                                 src=photo_url, fit=ft.ImageFit.COVER, height=160,

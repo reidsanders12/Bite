@@ -9,7 +9,7 @@ from typing import Any, Optional
 from app.config import ADMIN_EMAIL
 from app.database import Database
 from app.models import Circle, LogStreak, UserGoals
-from app import moderation
+from app import age_gate, moderation
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,22 @@ class AppState:
         self.refresh_workouts()
         self._auto_checkin_circles("workout")
 
+    def sync_health_workouts(self, workouts: list) -> int:
+        """Imports Apple Health / Health Connect workouts (see
+        app.health_engine.get_today_workouts) so a watch workout shows up
+        exactly like a manually-logged one -- home screen tally, workout
+        history list, and circle auto-checkin all read from the same
+        workout_logs table. Safe to call on every home screen load: rows
+        already imported are silently skipped (see
+        database.import_health_workouts's upsert). Returns the number of
+        genuinely new workouts added, so the caller only needs to
+        re-render/refresh when that's nonzero."""
+        added = self.db.import_health_workouts(workouts)
+        if added:
+            self.refresh_workouts()
+            self._auto_checkin_circles("workout")
+        return added
+
     def refresh_workout_history(self) -> None:
         """Pulls the full all-time workout history (for the workout history screen)."""
         try:
@@ -206,6 +222,12 @@ class AppState:
     def get_sponsors(self) -> list:
         """Returns the cached list of active sponsor rows."""
         return self.sponsors
+
+    def can_access_meal_feed(self) -> bool:
+        """True unless the signed-in account is a known minor (see
+        app/age_gate.py) -- gates the /meal_feed and /post_meal routes
+        (main.py) and hides their nav entry points (home_view.py)."""
+        return age_gate.can_access_meal_feed(self.profile_data.get("signup_age"))
 
     def is_admin(self) -> bool:
         """True if the signed-in user's email matches ADMIN_EMAIL (.env).
@@ -446,10 +468,24 @@ class AppState:
             self.circle_status_cache.pop(circle_id, None)
         return success, err
 
-    def check_in_circle(self, circle_id: int) -> None:
-        """Marks today's goal as met for the given circle and refreshes its status."""
-        self.db.check_in(circle_id)
-        self.get_circle_status(circle_id, force_refresh=True)
+    def check_in_circle(self, circle_id: int) -> tuple[bool, str]:
+        """Marks today's goal as met for the given circle and refreshes its
+        status. Returns (success, error_message) -- see db.check_in for why
+        that matters now."""
+        success, err = self.db.check_in(circle_id)
+        if success:
+            self.get_circle_status(circle_id, force_refresh=True)
+        return success, err
+
+    def undo_checkin_circle(self, circle_id: int) -> tuple[bool, str]:
+        """Reverses today's check-in for an accidental tap. Only meaningful
+        for manual (goal_type == 'custom') circles -- auto-checkin circles
+        derive today's status from calories/workout data instead of a
+        direct check-in row, so there's nothing here to undo for those."""
+        success, err = self.db.undo_check_in(circle_id)
+        if success:
+            self.get_circle_status(circle_id, force_refresh=True)
+        return success, err
 
     def get_circle_status(self, circle_id: int, force_refresh: bool = False) -> list:
         """Returns (and caches) member check-in/streak status for one circle."""
@@ -518,7 +554,7 @@ class AppState:
             self.refresh_meal_feed()
         return success, err
 
-    def report_meal_post(self, post_id: int, reason: str) -> tuple[bool, str]:
+    def report_meal_post(self, post_id: int, reason: str, category: str = "other") -> tuple[bool, str]:
         """Flags a post for admin review. Doesn't remove it from the
         reporter's own feed -- that's what Block is for. A reason is
         mandatory (also enforced by the DB check constraint) so the admin
@@ -527,7 +563,7 @@ class AppState:
         reason = (reason or "").strip()
         if not reason:
             return False, "Please tell us why you're reporting this post."
-        return self.db.report_meal_post(post_id, reason)
+        return self.db.report_meal_post(post_id, reason, category)
 
     def refresh_reported_posts(self) -> None:
         """Pulls every open report for the admin moderation screen."""
@@ -545,7 +581,10 @@ class AppState:
         """Resolves a report without deleting the post (admin-only, enforced by RLS)."""
         if not self.is_admin():
             return False, "Only the admin account can moderate reports."
-        success, err = self.db.dismiss_report(report_id)
+        post_id = next(
+            (r.get("post_id") for r in self.reported_posts if r.get("id") == report_id), None
+        )
+        success, err = self.db.dismiss_report(report_id, post_id=post_id)
         if success:
             self.refresh_reported_posts()
         return success, err
@@ -569,25 +608,44 @@ class AppState:
         calories: Optional[int] = None, protein: Optional[int] = None,
         carbs: Optional[int] = None, fat: Optional[int] = None, show_name: bool = True,
         meal_name: str = "", ingredients: str = "",
-    ) -> tuple[bool, str]:
-        """Uploads a meal photo and creates the post, then refreshes the feed cache.
-        show_name=False stores the post under "Anonymous" instead of the
-        caller's real display name."""
+    ) -> tuple[bool, str, bool]:
+        """Uploads a meal photo and creates the post, then refreshes the feed
+        cache. show_name=False stores the post under "Anonymous" instead of
+        the caller's real display name.
+
+        Returns (success, error_message, was_flagged). was_flagged is True
+        when app/moderation.py's ed_screening_flags() matched the caption/
+        meal name/ingredients -- the post is still created (never blocked,
+        see that module's docstring), just auto-filed into the admin review
+        queue via db.auto_flag_post(). post_meal_view.py uses was_flagged to
+        show the poster a support-resource dialog."""
         for text in (caption, meal_name, ingredients):
             if not moderation.is_caption_allowed(text):
-                return False, "Something you wrote isn't allowed -- please revise it."
+                return False, "Something you wrote isn't allowed -- please revise it.", False
 
         display_name = (self.current_user_name or "Bite User") if show_name else "Anonymous"
         photo_url, err = self.db.upload_meal_photo(photo_bytes)
         if not photo_url:
-            return False, err
-        success, err = self.db.create_meal_post(
+            return False, err, False
+        post_id, err = self.db.create_meal_post(
             photo_url, caption, display_name, visibility, circle_id,
             calories, protein, carbs, fat, meal_name, ingredients,
         )
-        if success:
-            self.refresh_meal_feed()
-        return success, err
+        if not post_id:
+            return False, err, False
+
+        self.refresh_meal_feed()
+
+        matched = set()
+        for text in (caption, meal_name, ingredients):
+            matched.update(moderation.ed_screening_flags(text))
+        was_flagged = bool(matched)
+        if was_flagged:
+            self.db.auto_flag_post(
+                post_id, category="pro_ed_content",
+                reason=f"Automated screening matched: {', '.join(sorted(matched))}",
+            )
+        return True, "", was_flagged
 
     def remove_meal_post(self, post_id) -> tuple[bool, str]:
         """Deletes a meal post from the cloud database and the local cache."""

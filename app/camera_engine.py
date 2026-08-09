@@ -105,13 +105,12 @@ class CameraEngine:
                 if detected_code:
                     self.stop_camera()
                     # Freeze the view on the exact frame the barcode was
-                    # recognized in (mirrored, matching the live preview)
-                    # before handing off to the lookup -- otherwise this
-                    # frame is never displayed at all (we return before the
-                    # display step below) and the preview just vanishes with
-                    # no visual confirmation that anything was scanned.
-                    display_frame = cv2.flip(frame, 1)
-                    success, buffer = cv2.imencode('.jpg', display_frame)
+                    # recognized in before handing off to the lookup --
+                    # otherwise this frame is never displayed at all (we
+                    # return before the display step below) and the preview
+                    # just vanishes with no visual confirmation that
+                    # anything was scanned.
+                    success, buffer = cv2.imencode('.jpg', frame)
                     if success:
                         self.latest_frame_bytes = buffer.tobytes()
                         image_control.src_base64 = base64.b64encode(self.latest_frame_bytes).decode("utf-8")
@@ -119,9 +118,10 @@ class CameraEngine:
                     await on_barcode_detect(detected_code)
                     return
 
-            # Mirror only for display -- detection above already ran on the
-            # unflipped frame.
-            frame = cv2.flip(frame, 1)
+            # No mirroring: this app photographs external subjects (food,
+            # barcodes), not the user themselves -- unlike a selfie camera,
+            # mirroring here would flip the saved photo left-right, not just
+            # the live preview (both share this same encoded frame).
 
             # 2. Compress and encode frame to JPEG for Flet display
             success, buffer = cv2.imencode('.jpg', frame)
