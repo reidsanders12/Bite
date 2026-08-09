@@ -64,7 +64,19 @@ function htmlPage(heading: string, body: string, tone: "ok" | "warn" | "error"):
 </html>`;
   return new Response(html, {
     status: tone === "error" ? 404 : 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      // Every outcome here reflects live per-request state (valid/limit
+      // reached/invalid, current redemption count) -- without this, a
+      // CDN or the browser itself can cache one outcome and keep serving
+      // it on a later scan. Observed in practice: the same URL flip-
+      // flopping between a correct text/html response and a stale
+      // gateway-level text/plain 404 with x-content-type-options:nosniff
+      // (which is what made Safari show raw HTML source instead of
+      // rendering it -- nosniff stops it from guessing past a stale
+      // plain-text header).
+      "Cache-Control": "no-store",
+    },
   });
 }
 

@@ -46,6 +46,16 @@ class AppState:
         self.meal_post_like_counts: dict = {}  # post_id -> like count -- meal feed screen
         self.my_liked_post_ids: set = set()  # post ids the caller has liked -- meal feed screen
         self.reported_posts: list = []  # open reports joined with their post -- admin moderation screen
+        # Last-fetched Health summary (steps/active_calories/etc, see
+        # health_engine.get_today_summary) -- home_view.py's async health
+        # sync writes here so a SYNCHRONOUS rebuild (e.g. right after that
+        # sync triggers rerender()) has an immediately-available value for
+        # the "calories allowed" math instead of starting back at zero on
+        # every rebuild. Never fetched this session == every value None.
+        self.health_summary_cache: dict = {
+            "steps": None, "active_calories": None, "total_calories": None,
+            "flights_climbed": None, "distance_m": None,
+        }
 
         # In-memory only: the coach conversation isn't persisted to Supabase,
         # so it resets on app restart (no chat table exists yet).
@@ -249,6 +259,18 @@ class AppState:
         """Returns the cached list of every sponsor row (any status)."""
         return self.sponsor_requests
 
+    def get_sponsor_redemption_stats(self) -> dict:
+        """Per-sponsor redemption usage for the Sponsor Requests screen --
+        see database.get_sponsor_redemption_stats for the shape. Not
+        cached like refresh_sponsor_requests()'s list -- this is only read
+        once per view build, so a fresh fetch each time is simpler than
+        adding another cache to invalidate."""
+        try:
+            return self.db.get_sponsor_redemption_stats()
+        except Exception as err:
+            logger.error("Sponsor redemption stats sync failed: %s", err)
+            return {}
+
     def approve_sponsor(self, sponsor_id: int) -> tuple[bool, str]:
         """Approves and activates a pending sponsor request.
 
@@ -333,17 +355,29 @@ class AppState:
         (see home_view.py) -- created on first request, stable after that."""
         return self.db.get_or_create_sponsor_redemption(sponsor_id)
 
-    def _auto_checkin_circles(self, trigger_type: str) -> None:
+    def get_cached_health_summary(self) -> dict:
+        """Returns the last-fetched Health summary (see health_summary_cache
+        in __init__) -- every value is None until home_view.py's async
+        health sync has resolved at least once this session."""
+        return self.health_summary_cache
+
+    def set_cached_health_summary(self, summary: dict) -> None:
+        self.health_summary_cache = summary
+
+    def _auto_checkin_circles(self, trigger_type: str, value: Optional[int] = None) -> None:
         """Marks today's goal done for any circle whose goal_type matches what
-        was just logged -- a workout, or hitting today's calorie target --
-        so members with those goal types never need to tap the check-in
-        button manually. 'custom' circles are untouched; those stay manual.
+        was just logged -- a workout, hitting today's calorie target, or (via
+        `value`, e.g. today's Health step count) hitting a step goal -- so
+        members with those goal types never need to tap the check-in button
+        manually. 'custom' circles are untouched; those stay manual.
         """
         self.refresh_circles()
         for circle in self.circles:
             if circle.goal_type != trigger_type:
                 continue
             if trigger_type == "calories" and self.get_daily_totals()["calories"] < (circle.goal_value or 0):
+                continue
+            if trigger_type == "steps" and (value or 0) < (circle.goal_value or 0):
                 continue
             self.db.check_in(circle.id)
             self.circle_status_cache.pop(circle.id, None)

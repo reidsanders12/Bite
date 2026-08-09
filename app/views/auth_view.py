@@ -6,6 +6,7 @@ import asyncio
 import logging
 
 import flet as ft
+from app import session_store
 from app import theme
 from app.age_gate import MIN_ACCOUNT_AGE, is_account_age_allowed
 from app.state import AppState
@@ -51,6 +52,16 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
         **theme.styled_field(),
     )
 
+    # Unchecked by default -- opt-in, same convention as most "Remember me"
+    # checkboxes. See app/session_store.py for what this actually does:
+    # the Supabase client's session normally lives in memory only, so
+    # without this every full app restart forces a fresh login regardless
+    # of how recently the user signed in.
+    remember_checkbox = ft.Checkbox(
+        label="Remember me", value=False, active_color=theme.ACCENT,
+        label_style=ft.TextStyle(size=13, color=theme.TEXT_MUTED),
+    )
+
     status_msg = ft.Text("", color=theme.ERROR, size=13, weight="w500", text_align=ft.TextAlign.CENTER)
 
     name_slot = ft.Container(content=None, height=0)
@@ -76,8 +87,22 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
     toggle_btn.on_click = toggle_mode
 
     # 2. Authentication Submit Pipelines
+    async def apply_remember_me():
+        """Called right after any successful sign-in/registration. Saves
+        the live session's tokens if "Remember me" is checked, or clears
+        any previously-remembered tokens if not -- otherwise a session
+        remembered on an earlier login would keep silently restoring even
+        after the user unchecks the box on a later one."""
+        if remember_checkbox.value:
+            session = state.db.client.auth.get_session()
+            if session:
+                await session_store.save_remembered_session(page, session.access_token, session.refresh_token)
+        else:
+            await session_store.clear_remembered_session(page)
+
     async def route_after_auth():
         """New accounts (no saved macro goals yet) go through onboarding first."""
+        await apply_remember_me()
         page.views.clear()
         if state.has_completed_onboarding():
             page.go("/")
@@ -251,6 +276,7 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                             age_slot,
                             email_field,
                             password_field,
+                            ft.Row([remember_checkbox], alignment=ft.MainAxisAlignment.START),
                         ], spacing=16),
                         padding=6
                     ),

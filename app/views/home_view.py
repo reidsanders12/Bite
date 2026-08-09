@@ -1,6 +1,8 @@
 """
 Main Home Dashboard View - Modern Minimalist Edition.
 """
+import time
+
 import flet as ft
 from app import promotions
 from app import qr_engine
@@ -87,12 +89,33 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 health_section.visible = True
                 page.update()
 
+            # Steps auto-checkin: circles with goal_type "steps" (see
+            # circles_view.py) get checked in the moment today's Health
+            # step count clears their target, same as "workout"/"calories"
+            # circles already do for their own triggers.
+            state._auto_checkin_circles("steps", summary.get("steps"))
+
+            # Cached on state so the *synchronous* part of this view (the
+            # calorie ring/remaining-budget math below, which runs before
+            # this async fetch resolves) has an immediately-available value
+            # on the next rebuild instead of starting from zero every time.
+            # rerender() only when something calorie-relevant actually
+            # changed -- otherwise every home load would rerender forever
+            # (this function reruns via rerender() -> build_home_view() ->
+            # this same task) without ever reaching a fixed point.
+            previous = state.get_cached_health_summary()
+            state.set_cached_health_summary(summary)
+            summary_changed = (
+                previous.get("active_calories") != summary.get("active_calories")
+                or previous.get("steps") != summary.get("steps")
+            )
+
             # rerender() re-runs this same sync on its way back in, but
             # only calls it again when new rows were actually added, so it
             # settles after at most one extra pass.
             workouts = await get_today_workouts(health, is_ios)
             added = state.sync_health_workouts(workouts)
-            if added:
+            if added or summary_changed:
                 rerender()
         except Exception:
             pass
@@ -126,12 +149,25 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
 
     # Logged exercise adds back to today's calorie budget (Goal + Exercise -
     # Food = Remaining), same convention as MyFitnessPal/most calorie trackers.
+    # Only *manual* workout_logs entries are summed here -- a HealthKit/Health
+    # Connect-imported workout's calories are already folded into
+    # cached_health_summary's active_calories (that's a whole-day aggregate
+    # covering every tracked activity, workouts included), so adding both
+    # would double-count exactly the entries state.sync_health_workouts()
+    # imported. Manual entries aren't sensed by Health at all, so they still
+    # need to be added on top.
+    cached_health_summary = state.get_cached_health_summary() if hasattr(state, "get_cached_health_summary") else {}
     burned_today = 0
     for w in (daily_workouts or []):
+        source = w.get("source", "manual") if isinstance(w, dict) else getattr(w, "source", "manual")
+        if source != "manual":
+            continue
         try:
             burned_today += int(w.get("calories_burned", 0) if isinstance(w, dict) else getattr(w, "calories_burned", 0))
         except (TypeError, ValueError):
             pass
+    if cached_health_summary.get("active_calories") is not None:
+        burned_today += round(cached_health_summary["active_calories"])
 
     adjusted_target_cal = target_cal + burned_today
     cal_progress = min(1.0, consumed_cal / max(1, adjusted_target_cal))
@@ -479,7 +515,15 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 page.close(sponsor_dialog)
                 page.open(ft.SnackBar(ft.Text(err or "Couldn't generate a redeem code -- try again.")))
                 return
-            redeem_url = f"{SUPABASE_URL}/functions/v1/redeem-sponsor?code={redemption['code']}"
+            # The trailing `_` param is ignored server-side (only `code`
+            # matters) -- it exists purely so this URL is never identical
+            # across two dialog opens, since a CDN edge node caching one
+            # specific URL from a stale/earlier deploy was observed to
+            # keep serving that stale copy indefinitely even after
+            # Cache-Control: no-store was added (that header only stops
+            # *future* caching, it doesn't purge what a given edge PoP
+            # already cached under the old URL).
+            redeem_url = f"{SUPABASE_URL}/functions/v1/redeem-sponsor?code={redemption['code']}&_={int(time.time())}"
             qr_b64 = qr_engine.qr_base64(redeem_url)
             # redemption_count only ever moves when staff actually scan the
             # QR (redeem_sponsor_code() in supabase_circles_schema.sql) --

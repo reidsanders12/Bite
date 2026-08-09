@@ -355,11 +355,19 @@ begin
         return;
     end if;
 
-    update sponsor_redemptions
-       set redemption_count = redemption_count + 1,
+    -- Table alias + qualified columns here, unlike the SELECT above --
+    -- this function's `returns table(...)` clause declares OUT columns
+    -- named redemption_count/redeemed_at, which plpgsql treats as
+    -- function-scoped variables of the same name. An unqualified
+    -- `redemption_count` in this UPDATE is genuinely ambiguous between
+    -- that variable and sponsor_redemptions.redemption_count -- Postgres
+    -- error 42702, caught live 2026-08-09 the first time this function
+    -- was actually invoked end-to-end.
+    update sponsor_redemptions as sr
+       set redemption_count = sr.redemption_count + 1,
            redeemed_at = now()
-     where id = v_id
-     returning redemption_count, redeemed_at into v_count, v_redeemed_at;
+     where sr.id = v_id
+     returning sr.redemption_count, sr.redeemed_at into v_count, v_redeemed_at;
 
     return query select 'ok', v_title, v_subtitle, v_count, v_max, v_redeemed_at;
 end;
@@ -887,3 +895,14 @@ alter table workout_logs add constraint workout_logs_user_external_unique
 drop policy if exists "circle_checkins_delete_own" on circle_checkins;
 create policy "circle_checkins_delete_own" on circle_checkins
     for delete to authenticated using (user_id = auth.uid());
+
+-- Lets an admin see every user's redemption row for a sponsor (not just
+-- their own, which is all sponsor_redemptions_select_own permits) -- the
+-- Sponsor Requests screen's "N people redeemed" stat (database.py's
+-- get_sponsor_redemption_stats) needs this to aggregate across users.
+-- Same profiles.is_admin check as every other admin-only policy here.
+drop policy if exists "sponsor_redemptions_select_admin" on sponsor_redemptions;
+create policy "sponsor_redemptions_select_admin" on sponsor_redemptions
+    for select to authenticated using (
+        exists (select 1 from profiles where id = auth.uid() and is_admin)
+    );

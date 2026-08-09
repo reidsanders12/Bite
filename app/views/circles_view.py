@@ -9,8 +9,13 @@ GOAL_TYPE_LABELS = {
     "custom": "Off (check in manually)",
     "workout": "Auto: when I log a workout",
     "calories": "Auto: when I hit a calorie target",
+    "steps": "Auto: when I hit a step goal",
 }
 GOAL_TYPE_BY_LABEL = {label: key for key, label in GOAL_TYPE_LABELS.items()}
+
+# goal_value's label/target-field text depends on which of these two
+# goal_types is selected -- "workout"/"custom" don't use goal_value at all.
+_TARGET_LABELS = {"calories": "Calorie target (kcal)", "steps": "Step target"}
 
 
 def build_circles_view(page: ft.Page, state) -> ft.View:
@@ -47,7 +52,10 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
     )
 
     def on_goal_type_change(e):
-        calorie_target_field.visible = goal_type_dropdown.value == GOAL_TYPE_LABELS["calories"]
+        goal_type = GOAL_TYPE_BY_LABEL.get(goal_type_dropdown.value)
+        calorie_target_field.visible = goal_type in _TARGET_LABELS
+        if goal_type in _TARGET_LABELS:
+            calorie_target_field.label = _TARGET_LABELS[goal_type]
         page.update()
 
     goal_type_dropdown.on_change = on_goal_type_change
@@ -75,11 +83,11 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
         goal_type = GOAL_TYPE_BY_LABEL.get(goal_type_dropdown.value, "custom")
 
         goal_value = None
-        if goal_type == "calories":
+        if goal_type in _TARGET_LABELS:
             try:
                 goal_value = int((calorie_target_field.value or "").strip())
             except ValueError:
-                dialog_error.value = "Enter a whole number for the calorie target."
+                dialog_error.value = f"Enter a whole number for the {_TARGET_LABELS[goal_type].lower()}."
                 page.update()
                 return
 
@@ -126,7 +134,10 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
     edit_dialog = ft.AlertDialog(modal=True)
 
     def on_edit_goal_type_change(e):
-        edit_calorie_target_field.visible = edit_goal_type_dropdown.value == GOAL_TYPE_LABELS["calories"]
+        goal_type = GOAL_TYPE_BY_LABEL.get(edit_goal_type_dropdown.value)
+        edit_calorie_target_field.visible = goal_type in _TARGET_LABELS
+        if goal_type in _TARGET_LABELS:
+            edit_calorie_target_field.label = _TARGET_LABELS[goal_type]
         page.update()
 
     edit_goal_type_dropdown.on_change = on_edit_goal_type_change
@@ -138,7 +149,9 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
             edit_goal_field.value = circle.goal_description
             edit_goal_type_dropdown.value = GOAL_TYPE_LABELS.get(circle.goal_type, GOAL_TYPE_LABELS["custom"])
             edit_calorie_target_field.value = str(circle.goal_value) if circle.goal_value else ""
-            edit_calorie_target_field.visible = circle.goal_type == "calories"
+            edit_calorie_target_field.visible = circle.goal_type in _TARGET_LABELS
+            if circle.goal_type in _TARGET_LABELS:
+                edit_calorie_target_field.label = _TARGET_LABELS[circle.goal_type]
             edit_dialog_error.value = ""
             page.open(edit_dialog)
         return handler
@@ -148,11 +161,11 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
         goal_type = GOAL_TYPE_BY_LABEL.get(edit_goal_type_dropdown.value, "custom")
 
         goal_value = None
-        if goal_type == "calories":
+        if goal_type in _TARGET_LABELS:
             try:
                 goal_value = int((edit_calorie_target_field.value or "").strip())
             except ValueError:
-                edit_dialog_error.value = "Enter a whole number for the calorie target."
+                edit_dialog_error.value = f"Enter a whole number for the {_TARGET_LABELS[goal_type].lower()}."
                 page.update()
                 return
 
@@ -286,6 +299,8 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
                 goal_line_parts.append("(auto: logs a workout)")
             elif circle.goal_type == "calories":
                 goal_line_parts.append(f"(auto: hits {circle.goal_value or 0} kcal)")
+            elif circle.goal_type == "steps":
+                goal_line_parts.append(f"(auto: hits {circle.goal_value or 0:,} steps)")
 
             circle_cards.controls.append(
                 theme.surface_card(

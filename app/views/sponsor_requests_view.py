@@ -19,6 +19,7 @@ def build_sponsor_requests_view(page: ft.Page, state) -> ft.View:
         state.refresh_sponsor_requests()
 
     requests = state.get_sponsor_requests() if hasattr(state, "get_sponsor_requests") else []
+    redemption_stats = state.get_sponsor_redemption_stats() if hasattr(state, "get_sponsor_redemption_stats") else {}
     status_txt = ft.Text("", size=12)
 
     def rerender() -> None:
@@ -214,6 +215,7 @@ def build_sponsor_requests_view(page: ft.Page, state) -> ft.View:
         contact_bits = [s.get("contact_name") or "", s.get("contact_email") or ""]
         contact_line = " • ".join(b for b in contact_bits if b)
         category = (s.get("category") or "").strip()
+        stats = redemption_stats.get(s["id"])
         return theme.surface_card(
             ft.Column(
                 [
@@ -237,6 +239,15 @@ def build_sponsor_requests_view(page: ft.Page, state) -> ft.View:
                     ft.Text(f"CTA: \"{s.get('cta_text', '')}\"", size=11, color=theme.TEXT_FAINT),
                     ft.Text(s["website_url"], size=11, color=theme.ACCENT) if s.get("website_url") else ft.Container(),
                     ft.Text(contact_line, size=11, color=theme.TEXT_FAINT) if contact_line else ft.Container(),
+                    # "people" is distinct users who've actually redeemed at
+                    # least once, "redemptions" is total scans across
+                    # everyone -- these differ once max_redemptions_per_user
+                    # is more than 1 for this sponsor.
+                    ft.Text(
+                        f"{stats['people']} people redeemed ({stats['redemptions']} total scans)"
+                        if stats and stats["redemptions"] else "No redemptions yet",
+                        size=11, color=theme.TEXT_FAINT,
+                    ) if s.get("status") == "approved" else ft.Container(),
                     actions,
                 ],
                 spacing=8,

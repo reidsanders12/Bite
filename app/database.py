@@ -1207,6 +1207,43 @@ class Database:
             logger.error(f"Failed to fetch sponsors: {e}")
             return []
 
+    def get_sponsor_redemption_stats(self) -> dict:
+        """Aggregates sponsor_redemptions into per-sponsor usage stats for
+        the Sponsor Requests admin screen: {sponsor_id: {"people": int,
+        "redemptions": int}}. "people" is how many distinct users have
+        actually redeemed at least once (redemption_count > 0 -- a row
+        exists the moment someone opens the Redeem dialog, before they've
+        necessarily shown it to staff, so a plain row count would overstate
+        real usage); "redemptions" is the total scan count across everyone,
+        which can exceed "people" when a sponsor's max_redemptions_per_user
+        is more than 1. One query for every sponsor rather than N, then
+        aggregated in Python -- this table has no need for a DB-side
+        GROUP BY given the expected row counts for a single-developer app.
+        Requires the sponsor_redemptions_select_admin RLS policy (only
+        admins can see redemption rows for users other than themselves) --
+        an empty dict back for a non-admin caller just means no stats show,
+        not an error.
+        """
+        try:
+            response = (
+                self.client.table("sponsor_redemptions")
+                .select("sponsor_id, redemption_count")
+                .execute()
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch sponsor redemption stats: {e}")
+            return {}
+
+        stats: dict = {}
+        for row in response.data or []:
+            sponsor_id = row.get("sponsor_id")
+            count = row.get("redemption_count") or 0
+            entry = stats.setdefault(sponsor_id, {"people": 0, "redemptions": 0})
+            if count > 0:
+                entry["people"] += 1
+                entry["redemptions"] += count
+        return stats
+
     def get_all_sponsors(self) -> List[dict]:
         """Fetches every sponsor row regardless of status, for the in-app
         Sponsor Requests review screen. Only returns rows if the caller's

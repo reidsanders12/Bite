@@ -7,6 +7,7 @@ from app import theme
 from app.age_gate import MIN_ACCOUNT_AGE, MIN_FEED_AGE
 from app.config import ADMIN_EMAIL, PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL
 from app.models import UserGoals
+from app import session_store
 
 LB_PER_KG = 2.20462
 CM_PER_IN = 2.54
@@ -294,11 +295,15 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
             )
         )
 
-    def sign_out(e):
+    async def sign_out(e):
         try:
             state.db.auth.sign_out()
         except Exception:
             pass
+        # Must be awaited, not called bare -- see session_store.py's
+        # docstring on why a sync client_storage call from an async
+        # handler self-deadlocks.
+        await session_store.clear_remembered_session(page)
         page.views.clear()
         page.go("/auth")
 
@@ -315,6 +320,7 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
             success, err = await state.db.delete_account()
             page.close(delete_account_dialog)
             if success:
+                await session_store.clear_remembered_session(page)
                 page.views.clear()
                 page.go("/auth")
             else:
@@ -422,7 +428,7 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                         "Log Out",
                         icon=ft.Icons.LOGOUT,
                         style=ft.ButtonStyle(color=theme.ERROR),
-                        on_click=sign_out
+                        on_click=lambda e: page.run_task(sign_out, e)
                     ),
                     ft.TextButton(
                         "Delete Account",

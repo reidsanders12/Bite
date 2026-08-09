@@ -8,6 +8,7 @@ configure_logging()
 
 # 1. IMPORT CONFIG FIRST (It loads everything into the environment automatically on import)
 from app import config
+from app import session_store
 from app import theme
 
 from app.state import AppState
@@ -146,9 +147,20 @@ def main(page: ft.Page):
     # Wire navigation state pipeline notification hooks
     page.on_route_change = route_change
     page.on_view_pop = view_pop
-    
-    # Boots directly to /auth so users can sign in or create an account.
-    page.go(page.route if page.route and page.route != "/" else "/auth")
+
+    # Boots directly to /auth so users can sign in or create an account --
+    # unless "Remember me" was checked on a previous login (see
+    # app/session_store.py), in which case a live session is restored here
+    # and this goes straight to / instead. Deep-link routes (page.route
+    # already set to something other than "/") are left untouched either
+    # way, same as before this existed.
+    deep_link_route = page.route if page.route and page.route != "/" else None
+    if deep_link_route:
+        page.go(deep_link_route)
+    elif session_store.try_restore_session(page, state.db):
+        page.go("/")
+    else:
+        page.go("/auth")
 
 
 if __name__ == "__main__":
