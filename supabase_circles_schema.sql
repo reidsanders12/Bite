@@ -373,6 +373,41 @@ begin
 end;
 $$;
 
+-- Read-only companion to redeem_sponsor_code() -- looks up the same info
+-- (title/subtitle/current count/limit) WITHOUT taking the row lock or
+-- incrementing anything. Used by the redeem-sponsor Edge Function's GET
+-- handler so that simply scanning/loading the page (which anyone who sees
+-- the QR can do, not just staff) never counts as a redemption -- only a
+-- follow-up POST from the "Mark as Used" button does. SECURITY DEFINER for
+-- the same reason as redeem_sponsor_code: the caller is an unauthenticated
+-- scanner, not the code's owner.
+create or replace function get_sponsor_redemption_status(p_code text)
+returns table (
+    outcome text,
+    sponsor_title text,
+    sponsor_subtitle text,
+    redemption_count integer,
+    max_redemptions_per_user integer,
+    redeemed_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+    select
+        case when s.max_redemptions_per_user is not null
+                  and sr.redemption_count >= s.max_redemptions_per_user
+             then 'limit_reached' else 'ok' end,
+        s.title,
+        s.subtitle,
+        sr.redemption_count,
+        s.max_redemptions_per_user,
+        sr.redeemed_at
+      from sponsor_redemptions sr
+      join sponsors s on s.id = sr.sponsor_id
+     where sr.code = p_code;
+$$;
+
 alter table circles enable row level security;
 alter table circle_members enable row level security;
 alter table circle_checkins enable row level security;
@@ -906,3 +941,87 @@ create policy "sponsor_redemptions_select_admin" on sponsor_redemptions
     for select to authenticated using (
         exists (select 1 from profiles where id = auth.uid() and is_admin)
     );
+
+-- Progress Photos: a private per-user photo timeline (Profile -> Progress
+-- Photos), plus an optional one-shot reminder for when to take the next
+-- one. Unlike meal-photos (public-read, since a post can be shown to other
+-- users), this bucket is NOT public -- these are personal body photos, so
+-- both the table and the storage bucket are locked to the owner only; the
+-- app fetches a short-lived signed URL to display each one
+-- (app/database.py's get_progress_photo_url), never a public URL.
+create table if not exists progress_photos (
+    id bigint generated always as identity primary key,
+    user_id uuid not null references auth.users(id) on delete cascade,
+    storage_path text not null,
+    taken_at timestamptz not null default now(),
+    note text,
+    created_at timestamptz not null default now()
+);
+
+alter table progress_photos enable row level security;
+
+drop policy if exists "progress_photos_select_own" on progress_photos;
+create policy "progress_photos_select_own" on progress_photos
+    for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists "progress_photos_insert_own" on progress_photos;
+create policy "progress_photos_insert_own" on progress_photos
+    for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists "progress_photos_delete_own" on progress_photos;
+create policy "progress_photos_delete_own" on progress_photos
+    for delete to authenticated using (user_id = auth.uid());
+
+insert into storage.buckets (id, name, public)
+values ('progress-photos', 'progress-photos', false)
+on conflict (id) do nothing;
+
+-- Same uid-prefixed-path pattern as meal-photos' storage policies, plus a
+-- select policy (meal-photos doesn't need one since it's public-read) --
+-- required here so create_signed_url can actually resolve a path owned by
+-- the caller.
+drop policy if exists "progress_photos_storage_insert_own" on storage.objects;
+create policy "progress_photos_storage_insert_own" on storage.objects
+    for insert to authenticated
+    with check (bucket_id = 'progress-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "progress_photos_storage_select_own" on storage.objects;
+create policy "progress_photos_storage_select_own" on storage.objects
+    for select to authenticated
+    using (bucket_id = 'progress-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+
+drop policy if exists "progress_photos_storage_delete_own" on storage.objects;
+create policy "progress_photos_storage_delete_own" on storage.objects
+    for delete to authenticated
+    using (bucket_id = 'progress-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- One pending "take your next photo" reminder per user -- upserted on
+-- user_id, not a history table, since only the next date ever matters.
+-- The actual OS-level local notification is scheduled entirely on-device
+-- (app/progress_photo_engine.py, via flet-local-notifications) -- this row
+-- exists so the reminder date survives a reinstall/new device and so the
+-- Progress Photos screen can show "Next photo: <date>" without relying on
+-- OS notification state, which isn't queryable from Python anyway.
+create table if not exists progress_photo_reminders (
+    user_id uuid primary key references auth.users(id) on delete cascade,
+    remind_at timestamptz not null,
+    updated_at timestamptz not null default now()
+);
+
+alter table progress_photo_reminders enable row level security;
+
+drop policy if exists "progress_photo_reminders_select_own" on progress_photo_reminders;
+create policy "progress_photo_reminders_select_own" on progress_photo_reminders
+    for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists "progress_photo_reminders_insert_own" on progress_photo_reminders;
+create policy "progress_photo_reminders_insert_own" on progress_photo_reminders
+    for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists "progress_photo_reminders_update_own" on progress_photo_reminders;
+create policy "progress_photo_reminders_update_own" on progress_photo_reminders
+    for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists "progress_photo_reminders_delete_own" on progress_photo_reminders;
+create policy "progress_photo_reminders_delete_own" on progress_photo_reminders
+    for delete to authenticated using (user_id = auth.uid());

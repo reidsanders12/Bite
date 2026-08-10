@@ -24,6 +24,7 @@ from app.views.lookup_view import build_lookup_view
 from app.views.meal_feed_view import build_meal_feed_view
 from app.views.post_meal_view import build_post_meal_view
 from app.views.pr_tracker_view import build_pr_tracker_view
+from app.views.progress_photos_view import build_progress_photos_view
 from app.views.reported_posts_view import build_reported_posts_view
 from app.views.settings_view import build_settings_view
 from app.views.snap_view import build_snap_view
@@ -46,6 +47,7 @@ VIEW_BUILDERS = {
     "/workout_history": build_workout_history_view,
     "/weight": build_weight_view,
     "/pr_tracker": build_pr_tracker_view,
+    "/progress_photos": build_progress_photos_view,
     "/meal_feed": build_meal_feed_view,
     "/post_meal": build_post_meal_view,
     "/sponsor_requests": build_sponsor_requests_view,

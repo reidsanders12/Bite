@@ -843,6 +843,126 @@ class Database:
             logger.error(f"Failed to compute PR summary: {e}")
             return {}
 
+    # --- PROGRESS PHOTOS ---
+
+    def upload_progress_photo(self, photo_bytes: bytes) -> tuple[Optional[str], str]:
+        """Uploads a JPEG to the progress-photos Storage bucket under this
+        user's own folder. Unlike upload_meal_photo, this bucket is NOT
+        public (see supabase_circles_schema.sql) -- these are personal body
+        photos, so this returns the storage path, not a URL; callers must
+        go through get_progress_photo_url() for a short-lived signed URL."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return None, "No active user session."
+
+        path = f"{uid}/{secrets.token_hex(8)}.jpg"
+        try:
+            self.client.storage.from_("progress-photos").upload(
+                path, photo_bytes, {"content-type": "image/jpeg"}
+            )
+            return path, ""
+        except Exception as e:
+            logger.error(f"Failed to upload progress photo: {e}")
+            return None, "Couldn't upload photo -- please try again."
+
+    def get_progress_photo_url(self, storage_path: str, expires_in: int = 3600) -> Optional[str]:
+        try:
+            resp = self.client.storage.from_("progress-photos").create_signed_url(storage_path, expires_in)
+            return resp.get("signedURL") or resp.get("signedUrl")
+        except Exception as e:
+            logger.error(f"Failed to sign progress photo URL: {e}")
+            return None
+
+    def create_progress_photo(self, storage_path: str, note: str = "") -> tuple[Optional[int], str]:
+        uid = self.get_current_user_id()
+        if not uid:
+            return None, "No active user session."
+        try:
+            resp = (
+                self.client.table("progress_photos")
+                .insert({"user_id": uid, "storage_path": storage_path, "note": note or None})
+                .execute()
+            )
+            return resp.data[0]["id"], ""
+        except Exception as e:
+            logger.error(f"Failed to save progress photo row: {e}")
+            return None, "Couldn't save photo -- please try again."
+
+    def get_progress_photos(self) -> List[dict]:
+        """Newest first, each with a freshly signed `url` good for
+        `expires_in` seconds -- signed on every call rather than cached,
+        since these rows are only ever fetched to render the timeline right
+        now, not stored for later."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return []
+        try:
+            resp = (
+                self.client.table("progress_photos")
+                .select("*")
+                .eq("user_id", uid)
+                .order("taken_at", desc=True)
+                .execute()
+            )
+            rows = resp.data or []
+            for row in rows:
+                row["url"] = self.get_progress_photo_url(row["storage_path"])
+            return rows
+        except Exception as e:
+            logger.error(f"Failed to fetch progress photos: {e}")
+            return []
+
+    def delete_progress_photo(self, photo_id: int, storage_path: str) -> tuple[bool, str]:
+        try:
+            self.client.table("progress_photos").delete().eq("id", photo_id).execute()
+            self.client.storage.from_("progress-photos").remove([storage_path])
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to delete progress photo: {e}")
+            return False, "Couldn't delete photo -- please try again."
+
+    def set_progress_photo_reminder(self, remind_at_iso: str) -> tuple[bool, str]:
+        """One pending reminder per user -- upsert on user_id overwrites
+        any previous one rather than accumulating a history, since only the
+        next photo date ever matters."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+        try:
+            self.client.table("progress_photo_reminders").upsert(
+                {"user_id": uid, "remind_at": remind_at_iso}, on_conflict="user_id"
+            ).execute()
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to set progress photo reminder: {e}")
+            return False, "Couldn't save reminder -- please try again."
+
+    def get_progress_photo_reminder(self) -> Optional[dict]:
+        uid = self.get_current_user_id()
+        if not uid:
+            return None
+        try:
+            resp = (
+                self.client.table("progress_photo_reminders")
+                .select("*")
+                .eq("user_id", uid)
+                .maybe_single()
+                .execute()
+            )
+            return resp.data if resp else None
+        except Exception as e:
+            logger.error(f"Failed to fetch progress photo reminder: {e}")
+            return None
+
+    def clear_progress_photo_reminder(self) -> None:
+        uid = self.get_current_user_id()
+        if not uid:
+            return
+        try:
+            self.client.table("progress_photo_reminders").delete().eq("user_id", uid).execute()
+        except Exception as e:
+            logger.error(f"Failed to clear progress photo reminder: {e}")
+
     # --- MEAL POSTS ---
 
     def upload_meal_photo(self, photo_bytes: bytes) -> tuple[Optional[str], str]:

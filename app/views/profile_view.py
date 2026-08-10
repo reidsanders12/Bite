@@ -387,6 +387,12 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                         on_click=lambda _: page.go("/pr_tracker")
                     ),
                     ft.TextButton(
+                        "Progress Photos",
+                        icon=ft.Icons.PHOTO_CAMERA_BACK_OUTLINED,
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                        on_click=lambda _: page.go("/progress_photos")
+                    ),
+                    ft.TextButton(
                         "Connect Health App",
                         icon=ft.Icons.FAVORITE_BORDER_ROUNDED,
                         style=ft.ButtonStyle(color=theme.TEXT_MUTED),

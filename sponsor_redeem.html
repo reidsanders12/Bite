@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bite Redemption</title>
+<style>
+  :root {
+    --bg-canvas: #FAF3EA;
+    --bg-surface: #FFFDF9;
+    --bg-alt: #F1E9DC;
+    --border: #E4D9C7;
+    --text-primary: #2B2622;
+    --text-muted: #75695A;
+    --ok: #4F7942;
+    --warn: #C1652F;
+    --error: #B3261E;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 32px 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg-canvas);
+    color: var(--text-primary);
+  }
+  .card {
+    width: 100%;
+    max-width: 360px;
+    text-align: center;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 24px;
+    box-shadow: 0 4px 16px rgba(43, 38, 34, 0.06);
+  }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  .body { font-size: 14px; color: var(--text-muted); line-height: 1.6; }
+  .badge {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    border-radius: 999px;
+    padding: 4px 12px;
+    margin-bottom: 14px;
+  }
+  button {
+    margin-top: 20px;
+    width: 100%;
+    font: inherit;
+    font-weight: 600;
+    font-size: 15px;
+    color: #FFFDF9;
+    background: var(--ok);
+    border: none;
+    border-radius: 10px;
+    padding: 13px 20px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  button:active:not(:disabled) { opacity: 0.85; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1 id="heading">Checking code&hellip;</h1>
+    <div class="body" id="body"></div>
+  </div>
+
+  <script>
+    // Fill these in from your own .env (SUPABASE_URL / SUPABASE_ANON_KEY) --
+    // same pattern as sponsor_signup.html. The anon key is meant to be
+    // public/client-side; what actually keeps this safe is that both RPCs
+    // below are the only way anything gets written (see
+    // supabase_circles_schema.sql), and get_sponsor_redemption_status is
+    // read-only -- loading this page (which anyone who sees the QR can do,
+    // not just staff) never counts as a redemption. Only tapping "Mark as
+    // Used" calls redeem_sponsor_code.
+    const SUPABASE_URL = "https://hnhsidziuoidmfbawlok.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhuaHNpZHppdW9pZG1mYmF3bG9rIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM1MzIyNDEsImV4cCI6MjA5OTEwODI0MX0.IYEkkR8LjLvv99zSEfvxxglTEE5HRiGs9IoT4lGGCc8";
+
+    const headingEl = document.getElementById("heading");
+    const bodyEl = document.getElementById("body");
+
+    const code = new URLSearchParams(location.search).get("code")?.trim();
+
+    function setTone(tone) {
+      headingEl.style.color = tone === "ok" ? "var(--ok)" : tone === "warn" ? "var(--warn)" : "var(--error)";
+    }
+
+    function offerLine(r) {
+      return `${escapeHtml(r.sponsor_title)} — ${escapeHtml(r.sponsor_subtitle)}`;
+    }
+    function usageLine(r) {
+      return r.max_redemptions_per_user != null
+        ? `Used ${r.redemption_count} of ${r.max_redemptions_per_user}.`
+        : `Used ${r.redemption_count} time${r.redemption_count === 1 ? "" : "s"}.`;
+    }
+    function escapeHtml(value) {
+      const div = document.createElement("div");
+      div.textContent = value ?? "";
+      return div.innerHTML;
+    }
+
+    async function callRpc(fn, payload) {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+        method: "POST",
+        headers: {
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      return res.json();
+    }
+
+    function showError(heading, message) {
+      setTone("error");
+      headingEl.textContent = heading;
+      bodyEl.innerHTML = escapeHtml(message);
+    }
+
+    function showLimitReached(result) {
+      setTone("warn");
+      headingEl.textContent = "Redemption limit reached";
+      bodyEl.innerHTML = `${offerLine(result)}<br>${escapeHtml(usageLine(result))}`;
+    }
+
+    function showOffer(result) {
+      setTone("ok");
+      headingEl.textContent = "Bite sponsor offer";
+      bodyEl.innerHTML =
+        `<span class="badge" style="color:var(--ok);background:#EAF1E4;">SCAN VERIFIED</span><br>` +
+        `${offerLine(result)}<br>${escapeHtml(usageLine(result))}`;
+
+      const btn = document.createElement("button");
+      btn.textContent = "Mark as Used";
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Marking as used…";
+        try {
+          const rows = await callRpc("redeem_sponsor_code", { p_code: code });
+          const r = rows?.[0];
+          if (!r) return showError("Invalid code", "This redemption code doesn't match any offer.");
+          if (r.outcome === "limit_reached") return showLimitReached(r);
+          setTone("ok");
+          headingEl.textContent = "Marked as used ✓";
+          bodyEl.innerHTML = `${offerLine(r)}<br>${escapeHtml(usageLine(r))}`;
+        } catch (err) {
+          showError("Something went wrong", "Please try again.");
+          btn.disabled = false;
+          btn.textContent = "Mark as Used";
+        }
+      });
+      bodyEl.appendChild(btn);
+    }
+
+    (async () => {
+      if (!code) return showError("Missing code", "This link is missing a redemption code.");
+      try {
+        const rows = await callRpc("get_sponsor_redemption_status", { p_code: code });
+        const result = rows?.[0];
+        if (!result) return showError("Invalid code", "This redemption code doesn't match any offer.");
+        if (result.outcome === "limit_reached") return showLimitReached(result);
+        showOffer(result);
+      } catch (err) {
+        showError("Something went wrong", "Please try scanning again.");
+      }
+    })();
+  </script>
+</body>
+</html>

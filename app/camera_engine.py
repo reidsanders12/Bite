@@ -23,11 +23,19 @@ BLANK_FRAME_B64 = (
 )
 
 class CameraEngine:
-    def __init__(self):
+    def __init__(self, camera_index: int = 0):
+        # 0 is the back/rear camera on every device this has been tested
+        # on (Snap & Log, Post a Meal both photograph something external,
+        # so that's the right default there). Progress Photos passes 1 for
+        # the front/selfie camera instead -- device camera-index ordering
+        # isn't formally guaranteed by OpenCV's iOS/Android backends, so if
+        # 1 turns out to open the wrong camera on a given device, this is
+        # the number to flip.
+        self.camera_index = camera_index
         self.cap = None
         self.is_running = False
         self.latest_frame_bytes = None
-        
+
         # Correct sub-namespaces for OpenCV's built-in detectors
         self.barcode_detector = cv2.barcode.BarcodeDetector()
         self.qr_detector = cv2.QRCodeDetector()
@@ -35,7 +43,7 @@ class CameraEngine:
     def start_camera(self):
         """Initialize hardware camera."""
         if not self.cap or not self.cap.isOpened():
-            self.cap = cv2.VideoCapture(0)  # 0 is typically the built-in webcam
+            self.cap = cv2.VideoCapture(self.camera_index)
             self.is_running = True
 
     def stop_camera(self):

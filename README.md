@@ -105,6 +105,7 @@ USDA_API_KEY="your-usda-key"            # https://fdc.nal.usda.gov/api-key-signu
 SUPABASE_URL="https://xxxx.supabase.co"
 SUPABASE_ANON_KEY="your-supabase-anon-key"
 ADMIN_EMAIL="you@example.com"           # optional -- unlocks Profile -> Sponsor Requests for this account
+SPONSOR_REDEEM_URL="https://your-host/"                 # optional -- see "Sponsor redemption" below; live at bitesponsorredeem.netlify.app
 ```
 
 Note there's no `GEMINI_API_KEY` here — that key now lives only as a
@@ -220,6 +221,39 @@ file for `you@example.com` and replace both occurrences with the same
 address you set as `ADMIN_EMAIL`, then rerun the file (it's idempotent). A
 starter row ("IronWorks Gym", pre-approved) is seeded once so the home
 screen isn't empty out of the box.
+
+### Sponsor redemption: the QR each sponsor card shows
+
+Tapping "Redeem" on a sponsor card generates a per-user, per-sponsor QR
+code (`sponsor_redemptions.code`, a long random token — see
+`app/database.py`'s `get_or_create_sponsor_redemption`). Staff scan it with
+any phone camera, no Bite account or app needed, and land on a page
+showing the offer plus a **"Mark as Used"** button — nothing is recorded
+until they tap it, since the QR itself is visible to the customer too and
+just loading the page must never silently count as a redemption. Both
+steps (the read-only lookup and the actual increment) go through
+`get_sponsor_redemption_status()` / `redeem_sponsor_code()`
+(`supabase_circles_schema.sql`, `SECURITY DEFINER`, already granted
+`EXECUTE` to `anon`) so any client holding just the public anon key can
+call them directly.
+
+Two ways to host the page the QR links to, same "host it yourself" pattern
+as `sponsor_signup.html`:
+
+1. **[`sponsor_redeem.html`](sponsor_redeem.html) (recommended, currently
+   live)** — a self-contained static page, no server or build step. Fill in
+   its `SUPABASE_URL`/`SUPABASE_ANON_KEY` placeholders from your `.env`,
+   host it anywhere static (GitHub Pages, Netlify — deployed as the site's
+   `index.html` at [bitesponsorredeem.netlify.app](https://bitesponsorredeem.netlify.app),
+   a separate Netlify site from `sponsor_signup.html`'s), then set
+   `SPONSOR_REDEEM_URL` in `.env` to wherever it ends up (the site's root,
+   not the filename, if it's deployed as `index.html` like this one). The
+   QR will point there.
+2. **Leave `SPONSOR_REDEEM_URL` unset** — falls back to the
+   `redeem-sponsor` Edge Function's own page (`supabase/functions/redeem-sponsor`,
+   already deployed, same two-step flow). No extra hosting needed, but the
+   page's styling lives in the function's TypeScript rather than being a
+   plain file you can hand-edit.
 
 ## App Store / Play Store compliance
 
@@ -360,7 +394,9 @@ no-ops if so.
     reach a target you set) — members see each other's check-in status and
     day streak, but never each other's food logs. The circle's creator can
     edit the goal (type/target/description) at any time; RLS enforces that
-    only the creator can.
+    only the creator can. Each circle card has an **Invite** button that
+    opens a small share sheet (Message / Email / Copy — see "Share PRs and
+    circle invites" below) pre-filled with the invite code.
 11. **AI Workout Logging** — describe a workout in plain language ("45 min
     upper body lifting", "Ran 5k in 30 minutes") and Gemini estimates
     calories burned (using your saved bodyweight, if any) — editable before
@@ -387,7 +423,9 @@ no-ops if so.
     single workout, most calories burned in one workout, total workouts
     logged, and lowest/highest logged weight. Nothing to configure or log
     separately — it's a read-only view over `workout_logs`, `weight_logs`,
-    and `food_logs`.
+    and `food_logs`. The app bar's share icon opens the same share sheet as
+    Friend Circles' Invite button, pre-filled with a text summary of every
+    record currently shown.
 16. **Meal Feed** — reachable from the home screen's meal icon. Post a
     photo of what you're eating (camera capture, no AI analysis — this is
     a lightweight social share, not another logging path) with an optional
@@ -405,6 +443,26 @@ no-ops if so.
     URL isn't — see the comment above `upload_meal_photo()` in
     `app/database.py` for the
     tradeoff.
+17. **Progress Photos** — reachable from Profile → Progress Photos. A
+    private per-user photo timeline (camera capture, same engine as Meal
+    Feed/Snap & Log) with an optional note per photo. Unlike Meal Feed's
+    photos, these live in a **private** Storage bucket (`progress-photos`,
+    `public=false`) — the app always displays them via a short-lived signed
+    URL (`database.get_progress_photo_url`), never a public one. You can
+    also pick when you want your next photo (presets or a custom date via
+    `set_progress_photo_reminder`); once that date passes, the Home screen
+    shows a tap-to-open banner reminder. There's no OS-level push
+    notification for this yet — see "Share PRs and circle invites" below
+    for why, which covers the same underlying constraint (no verified
+    Flet plugin for this that's confirmed working on `flet build ipa`
+    iOS builds).
+18. **Share PRs and circle invites** — Personal Records and Friend Circles
+    both have a share action (`app/share_engine.py`) that opens a small
+    in-app dialog offering **Message**, **Email**, or **Copy** — not a true
+    native share sheet (there's no published `flet-share`/`share_plus`
+    equivalent for Flet as of writing), but `sms:`/`mailto:` URL schemes
+    via `page.launch_url` cover the same practical destinations, and
+    Messages/Mail both let you pick a contact once they open.
 
 ## Notes & next steps
 
@@ -425,3 +483,14 @@ no-ops if so.
   directly from your own device with your own keys. Gemini calls are also
   live, but go through the `gemini-proxy` Edge Function rather than
   straight from the device — see "Why a proxy in front of Gemini?" above.
+- **Real OS-level local notifications** (Progress Photos' reminder is
+  in-app-only today, see item 17 above): the one package actually published
+  to PyPI, `flet-local-notifications`, states iOS support as "Planned —
+  Cannot test currently" as of this writing, so it's a dead end for this
+  app's target platform. `Bbalduzz/flet_notifications` on GitHub wraps the
+  real `flutter_local_notifications` (which does support iOS properly) and
+  looks more promising, but it's unpublished (git-only install) and
+  unverified against this project's exact `flet build ipa` pipeline —
+  worth a dedicated spike-and-test-build before wiring it in for real,
+  given how much friction new native plugins have caused here before (see
+  the Health integration bugs earlier in this file's history).

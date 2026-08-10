@@ -7,6 +7,7 @@ table or manual entry required.
 import flet as ft
 
 from app import theme
+from app.share_engine import open_share_sheet
 
 LB_PER_KG = 2.20462
 
@@ -47,6 +48,10 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
         return kg * LB_PER_KG if is_imperial else kg
 
     cards = ft.Column(spacing=12)
+    # Mirrors each card pushed below, in the same order -- used to build the
+    # "Share My Records" message rather than scraping text back out of the
+    # built controls.
+    share_lines = []
 
     food_best = summary.get("food_streak_best") or 0
     if food_best:
@@ -55,6 +60,7 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
             ft.Icons.LOCAL_FIRE_DEPARTMENT_ROUNDED, "Best Logging Streak",
             f"{food_best}d", f"Current streak: {food_current}d", theme.ACCENT,
         ))
+        share_lines.append(f"Best logging streak: {food_best}d")
 
     workout_best = summary.get("workout_streak_best") or 0
     if workout_best:
@@ -63,6 +69,7 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
             ft.Icons.WHATSHOT_ROUNDED, "Best Workout Streak",
             f"{workout_best}d", f"Current streak: {workout_current}d", theme.PROTEIN,
         ))
+        share_lines.append(f"Best workout streak: {workout_best}d")
 
     longest_workout = summary.get("longest_workout")
     if longest_workout and (longest_workout.get("duration_minutes") or 0) > 0:
@@ -72,6 +79,7 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
             ft.Icons.TIMER_OUTLINED, "Longest Workout",
             f"{longest_workout['duration_minutes']} min", f"{name} · {date_str}", theme.CARBS,
         ))
+        share_lines.append(f"Longest workout: {longest_workout['duration_minutes']} min ({name})")
 
     most_cal_workout = summary.get("most_calories_workout")
     if most_cal_workout and (most_cal_workout.get("calories_burned") or 0) > 0:
@@ -81,6 +89,7 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
             ft.Icons.LOCAL_FIRE_DEPARTMENT_ROUNDED, "Most Calories Burned",
             f"{most_cal_workout['calories_burned']:,} kcal", f"{name} · {date_str}", theme.FAT,
         ))
+        share_lines.append(f"Most calories burned: {most_cal_workout['calories_burned']:,} kcal ({name})")
 
     total_workouts = summary.get("total_workouts") or 0
     if total_workouts:
@@ -88,6 +97,7 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
             ft.Icons.FITNESS_CENTER_ROUNDED, "Total Workouts Logged",
             f"{total_workouts:,}", "All-time count", theme.TEXT_PRIMARY,
         ))
+        share_lines.append(f"Total workouts logged: {total_workouts:,}")
 
     lowest_weight = summary.get("lowest_weight")
     if lowest_weight:
@@ -96,6 +106,7 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
             ft.Icons.TRENDING_DOWN_ROUNDED, "Lowest Logged Weight",
             f"{to_display_weight(lowest_weight['weight_kg']):.1f} {weight_unit}", date_str, theme.SUCCESS,
         ))
+        share_lines.append(f"Lowest logged weight: {to_display_weight(lowest_weight['weight_kg']):.1f} {weight_unit}")
 
     highest_weight = summary.get("highest_weight")
     if highest_weight:
@@ -104,6 +115,7 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
             ft.Icons.TRENDING_UP_ROUNDED, "Highest Logged Weight",
             f"{to_display_weight(highest_weight['weight_kg']):.1f} {weight_unit}", date_str, theme.TEXT_MUTED,
         ))
+        share_lines.append(f"Highest logged weight: {to_display_weight(highest_weight['weight_kg']):.1f} {weight_unit}")
 
     if not cards.controls:
         cards.controls.append(
@@ -122,11 +134,26 @@ def build_pr_tracker_view(page: ft.Page, state) -> ft.View:
             )
         )
 
+    def share_records(e):
+        message = "My Bite! Personal Records:\n" + "\n".join(f"- {line}" for line in share_lines)
+        open_share_sheet(page, message, subject="My Bite! Personal Records")
+
     return ft.View(
         route="/pr_tracker",
         bgcolor=theme.BG_CANVAS,
         controls=[
-            theme.app_bar("Personal Records", on_back=lambda e: page.go("/profile")),
+            theme.app_bar(
+                "Personal Records",
+                on_back=lambda e: page.go("/profile"),
+                actions=[
+                    ft.IconButton(
+                        icon=ft.Icons.IOS_SHARE,
+                        icon_color=theme.TEXT_MUTED,
+                        tooltip="Share my records",
+                        on_click=share_records,
+                    )
+                ] if share_lines else None,
+            ),
             ft.Container(
                 content=ft.Column([cards], spacing=14, scroll=ft.ScrollMode.HIDDEN, expand=True),
                 padding=20, expand=True,

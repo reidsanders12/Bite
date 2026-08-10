@@ -46,6 +46,8 @@ class AppState:
         self.meal_post_like_counts: dict = {}  # post_id -> like count -- meal feed screen
         self.my_liked_post_ids: set = set()  # post ids the caller has liked -- meal feed screen
         self.reported_posts: list = []  # open reports joined with their post -- admin moderation screen
+        self.progress_photos: list = []  # newest first, each with a signed `url` -- progress photos screen
+        self.progress_photo_reminder: Optional[dict] = None  # {"remind_at": ...} or None
         # Last-fetched Health summary (steps/active_calories/etc, see
         # health_engine.get_today_summary) -- home_view.py's async health
         # sync writes here so a SYNCHRONOUS rebuild (e.g. right after that
@@ -694,6 +696,60 @@ class AppState:
         self.meal_post_like_counts.pop(post_id, None)
         self.my_liked_post_ids.discard(post_id)
         return True, ""
+
+    # --- PROGRESS PHOTOS ---
+
+    def refresh_progress_photos(self) -> None:
+        try:
+            self.progress_photos = self.db.get_progress_photos()
+        except Exception as err:
+            logger.error("Progress photos sync failed: %s", err)
+            self.progress_photos = []
+
+    def get_progress_photos(self) -> list:
+        return self.progress_photos
+
+    def add_progress_photo(self, photo_bytes: bytes, note: str = "") -> tuple[bool, str]:
+        """Uploads to the private progress-photos bucket, saves the row,
+        then refreshes the cache so the new photo shows up immediately."""
+        storage_path, err = self.db.upload_progress_photo(photo_bytes)
+        if not storage_path:
+            return False, err
+        photo_id, err = self.db.create_progress_photo(storage_path, note)
+        if not photo_id:
+            return False, err
+        self.refresh_progress_photos()
+        return True, ""
+
+    def remove_progress_photo(self, photo_id: int) -> tuple[bool, str]:
+        photo = next((p for p in self.progress_photos if p.get("id") == photo_id), None)
+        storage_path = photo.get("storage_path") if photo else None
+        if not storage_path:
+            return False, "Photo not found."
+        success, err = self.db.delete_progress_photo(photo_id, storage_path)
+        if success:
+            self.progress_photos = [p for p in self.progress_photos if p.get("id") != photo_id]
+        return success, err
+
+    def refresh_progress_photo_reminder(self) -> None:
+        try:
+            self.progress_photo_reminder = self.db.get_progress_photo_reminder()
+        except Exception as err:
+            logger.error("Progress photo reminder sync failed: %s", err)
+            self.progress_photo_reminder = None
+
+    def get_progress_photo_reminder(self) -> Optional[dict]:
+        return self.progress_photo_reminder
+
+    def set_progress_photo_reminder(self, remind_at_iso: str) -> tuple[bool, str]:
+        success, err = self.db.set_progress_photo_reminder(remind_at_iso)
+        if success:
+            self.refresh_progress_photo_reminder()
+        return success, err
+
+    def clear_progress_photo_reminder(self) -> None:
+        self.db.clear_progress_photo_reminder()
+        self.progress_photo_reminder = None
 
     def set_pending(self, breakdown: Any, source: str) -> None:
         """Stages an unconfirmed macro breakdown for the Confirm view."""

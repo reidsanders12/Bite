@@ -4,6 +4,7 @@ Friend Circles: shared, custom accountability goals with invite-code joining.
 import flet as ft
 
 from app import theme
+from app.share_engine import open_share_sheet
 
 GOAL_TYPE_LABELS = {
     "custom": "Off (check in manually)",
@@ -222,6 +223,15 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
                 show_status(f"Couldn't {verb}: {err}", ok=False)
         return handler
 
+    def make_invite_handler(circle):
+        def handler(e):
+            message = (
+                f"Join my \"{circle.name}\" circle on Bite! Use invite code {circle.invite_code} "
+                "in the Friend Circles screen to join."
+            )
+            open_share_sheet(page, message, subject=f"Join {circle.name} on Bite!")
+        return handler
+
     def make_leave_handler(circle_id):
         def handler(e):
             state.leave_circle(circle_id)
@@ -330,7 +340,18 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
                             ft.Text(" ".join(goal_line_parts), size=13, color=theme.TEXT_MUTED),
                             ft.Divider(color=theme.BORDER, height=1),
                             ft.Column(member_rows, spacing=8) if member_rows else ft.Container(),
-                            ft.Text(f"Invite code: {circle.invite_code}", size=11, color=theme.TEXT_FAINT),
+                            ft.Row(
+                                [
+                                    ft.Text(f"Invite code: {circle.invite_code}", size=11, color=theme.TEXT_FAINT, expand=True),
+                                    ft.TextButton(
+                                        "Invite",
+                                        icon=ft.Icons.IOS_SHARE,
+                                        style=ft.ButtonStyle(color=theme.ACCENT),
+                                        on_click=make_invite_handler(circle),
+                                    ),
+                                ],
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
                             theme.primary_button(
                                 "Checked in -- tap to undo" if already_checked_in else "Mark today's goal done",
                                 icon=ft.Icons.UNDO if already_checked_in else ft.Icons.CHECK,

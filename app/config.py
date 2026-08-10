@@ -44,3 +44,12 @@ ACCOUNT_DELETION_URL = os.getenv("ACCOUNT_DELETION_URL", "").strip()
 # terms_of_service.html (repo root). Unset hides the Profile button rather
 # than opening a dead link, same as the other two.
 TERMS_OF_SERVICE_URL = os.getenv("TERMS_OF_SERVICE_URL", "").strip()
+
+# Same "host it yourself" pattern again -- sponsor_redeem.html (repo root)
+# is what a sponsor's QR code (home_view.py) links to. Unset falls back to
+# the redeem-sponsor Edge Function's own page (see
+# supabase/functions/redeem-sponsor) so redemption still works before this
+# is configured; once you deploy sponsor_redeem.html somewhere static
+# (same flow as sponsor_signup.html/bitesponsors.netlify.app) and set this,
+# the QR points there instead.
+SPONSOR_REDEEM_URL = os.getenv("SPONSOR_REDEEM_URL", "").strip()

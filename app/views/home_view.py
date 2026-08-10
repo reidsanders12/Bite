@@ -1,13 +1,14 @@
 """
 Main Home Dashboard View - Modern Minimalist Edition.
 """
+import datetime
 import time
 
 import flet as ft
 from app import promotions
 from app import qr_engine
 from app import theme
-from app.config import SUPABASE_URL
+from app.config import SUPABASE_URL, SPONSOR_REDEEM_URL
 from app.health_engine import get_health_control, get_today_summary, get_today_workouts
 from app.state import AppState
 
@@ -30,6 +31,22 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         state.refresh_workouts()
     if hasattr(state, "refresh_sponsors"):
         state.refresh_sponsors()
+    if hasattr(state, "refresh_progress_photo_reminder"):
+        state.refresh_progress_photo_reminder()
+
+    # No OS-level push notification fires this -- there's no verified,
+    # iOS-tested Flet notification plugin available yet (see README). This
+    # banner is the fallback: it only surfaces once the reminder date has
+    # passed AND the user actually opens the app, so it's a real prompt for
+    # anyone with the app on their home screen, just not a background alert.
+    photo_reminder = state.get_progress_photo_reminder() if hasattr(state, "get_progress_photo_reminder") else None
+    photo_reminder_due = False
+    if photo_reminder and photo_reminder.get("remind_at"):
+        try:
+            remind_at = datetime.datetime.fromisoformat(photo_reminder["remind_at"].replace("Z", "+00:00"))
+            photo_reminder_due = remind_at <= datetime.datetime.now(datetime.timezone.utc)
+        except ValueError:
+            photo_reminder_due = False
 
     def rerender() -> None:
         # See the matching comment in circles_view.py -- rebuilds this view
@@ -515,15 +532,24 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 page.close(sponsor_dialog)
                 page.open(ft.SnackBar(ft.Text(err or "Couldn't generate a redeem code -- try again.")))
                 return
-            # The trailing `_` param is ignored server-side (only `code`
-            # matters) -- it exists purely so this URL is never identical
-            # across two dialog opens, since a CDN edge node caching one
-            # specific URL from a stale/earlier deploy was observed to
-            # keep serving that stale copy indefinitely even after
-            # Cache-Control: no-store was added (that header only stops
-            # *future* caching, it doesn't purge what a given edge PoP
-            # already cached under the old URL).
-            redeem_url = f"{SUPABASE_URL}/functions/v1/redeem-sponsor?code={redemption['code']}&_={int(time.time())}"
+            if SPONSOR_REDEEM_URL:
+                # sponsor_redeem.html hosted wherever you deployed it (see
+                # app/config.py) -- a static page, so no per-URL caching
+                # issue like the Edge Function fallback below has: its JS
+                # fetches live status by `code` on every load regardless of
+                # whether the HTML shell itself was cached.
+                redeem_url = f"{SPONSOR_REDEEM_URL}?code={redemption['code']}"
+            else:
+                # Fallback: the redeem-sponsor Edge Function's own page.
+                # The trailing `_` param is ignored server-side (only `code`
+                # matters) -- it exists purely so this URL is never identical
+                # across two dialog opens, since a CDN edge node caching one
+                # specific URL from a stale/earlier deploy was observed to
+                # keep serving that stale copy indefinitely even after
+                # Cache-Control: no-store was added (that header only stops
+                # *future* caching, it doesn't purge what a given edge PoP
+                # already cached under the old URL).
+                redeem_url = f"{SUPABASE_URL}/functions/v1/redeem-sponsor?code={redemption['code']}&_={int(time.time())}"
             qr_b64 = qr_engine.qr_base64(redeem_url)
             # redemption_count only ever moves when staff actually scan the
             # QR (redeem_sponsor_code() in supabase_circles_schema.sql) --
@@ -640,6 +666,21 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
             ),
             ft.Container(
                 content=ft.Column([
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Icon(ft.Icons.PHOTO_CAMERA_BACK_OUTLINED, color=theme.ACCENT_ON, size=20),
+                                ft.Text(
+                                    "Time for your progress photo -- tap to take it",
+                                    size=13, weight="w600", color=theme.ACCENT_ON, expand=True,
+                                ),
+                                ft.Icon(ft.Icons.CHEVRON_RIGHT_ROUNDED, color=theme.ACCENT_ON, size=18),
+                            ],
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
+                        bgcolor=theme.ACCENT, border_radius=theme.RADIUS_MD,
+                        padding=14, on_click=lambda e: page.go("/progress_photos"),
+                    ) if photo_reminder_due else ft.Container(),
                     ft.Row([streak_badge], alignment=ft.MainAxisAlignment.START),
                     progress_card,
                     ft.Divider(color="transparent", height=4),
