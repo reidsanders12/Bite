@@ -6,17 +6,13 @@ a date for your next photo; the Home screen surfaces a reminder banner
 once that date has passed (see home_view.py's progress_photo_due check --
 there's no OS-level push notification for this yet, see README).
 """
+import base64
 import datetime
 
 import flet as ft
+import flet_native_camera as fnc
 
 from app import theme
-from app.camera_engine import BLANK_FRAME_B64, CameraEngine
-
-# Front/selfie camera -- see CameraEngine's docstring on camera_index for
-# why this is a guess (1) rather than a guarantee, and what to flip if a
-# real device opens the wrong one.
-camera_manager = CameraEngine(camera_index=1)
 
 _PRESETS = [
     ("1 week", 7),
@@ -43,10 +39,21 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
     photos = state.get_progress_photos() if hasattr(state, "get_progress_photos") else []
     reminder = state.get_progress_photo_reminder() if hasattr(state, "get_progress_photo_reminder") else None
 
+    # Front/selfie camera -- unlike the old CameraEngine(camera_index=1),
+    # lens_direction="front" is a real, documented selector passed to the
+    # camera plugin's CameraDescription.lensDirection, not a guess at index
+    # ordering. Visible -- lives inline in the preview box below.
+    camera = fnc.NativeCamera(lens_direction=fnc.LensDirection.FRONT, width=280, height=280)
+
     def rerender() -> None:
-        camera_manager.stop_camera()
-        page.views[-1] = build_progress_photos_view(page, state)
-        page.update()
+        # Stop explicitly before tearing down this view's widget tree --
+        # relying on widget-disposal timing alone risks the new view's
+        # camera starting before this one's AVCaptureSession is released.
+        async def _rerender():
+            await camera.stop_async()
+            page.views[-1] = build_progress_photos_view(page, state)
+            page.update()
+        page.run_task(_rerender)
 
     status_txt = ft.Text("", size=12)
 
@@ -132,12 +139,10 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
 
     # --- Capture ---
 
-    view_stream = ft.Image(
-        src_base64=BLANK_FRAME_B64, width=280, height=280,
-        fit=ft.ImageFit.COVER, border_radius=theme.RADIUS_MD,
-    )
     captured_bytes = {"value": None}
     note_field = ft.TextField(label="Note (optional)", **theme.styled_field())
+    photo_preview = ft.Image(width=280, height=280, fit=ft.ImageFit.COVER, border_radius=theme.RADIUS_MD, visible=False)
+    placeholder_icon = ft.Icon(ft.Icons.CAMERA_ALT, size=64, color=theme.TEXT_FAINT)
 
     capture_button = theme.primary_button("Capture Photo", icon=ft.Icons.CAMERA_ALT)
     retake_button = ft.TextButton(
@@ -146,31 +151,41 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
     save_button = theme.primary_button("Save Photo", icon=ft.Icons.CHECK, visible=False)
     review_section = ft.Column([note_field], visible=False, spacing=10)
 
-    def start_capture_loop():
-        page.run_task(camera_manager.stream_views, view_stream, "snap")
+    def on_camera_error(e):
+        show_status(f"Camera error: {e.data}", ok=False)
+
+    camera.on_error = on_camera_error
+
+    async def start_camera():
+        started = await camera.start_async()
+        if not started:
+            show_status("Couldn't start the camera.", ok=False)
 
     async def on_capture(e):
-        photo_bytes = camera_manager.get_captured_photo()
+        photo_bytes = await camera.take_picture_async()
         if not photo_bytes:
-            show_status("Failed to capture frame from viewport.", ok=False)
+            show_status("No photo captured.", ok=False)
             return
-        camera_manager.stop_camera()
+        await camera.stop_async()
         captured_bytes["value"] = photo_bytes
+        photo_preview.src_base64 = base64.b64encode(photo_bytes).decode("utf-8")
+        photo_preview.visible = True
         capture_button.visible = False
         retake_button.visible = True
         review_section.visible = True
         save_button.visible = True
         page.update()
 
-    def on_retake(e):
-        captured_bytes["value"] = None
-        note_field.value = ""
+    async def on_retake(e):
+        photo_preview.visible = False
         capture_button.visible = True
         retake_button.visible = False
         review_section.visible = False
         save_button.visible = False
         page.update()
-        start_capture_loop()
+        started = await camera.start_async()
+        if not started:
+            show_status("Couldn't restart the camera.", ok=False)
 
     def on_save(e):
         if not captured_bytes["value"]:
@@ -187,8 +202,6 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
     capture_button.on_click = on_capture
     retake_button.on_click = on_retake
     save_button.on_click = on_save
-
-    start_capture_loop()
 
     # --- Timeline ---
 
@@ -236,8 +249,10 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
         )
 
     def handle_back(e):
-        camera_manager.stop_camera()
+        page.run_task(camera.stop_async)
         page.go("/profile")
+
+    page.run_task(start_camera)
 
     return ft.View(
         route="/progress_photos",
@@ -250,9 +265,10 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
                         reminder_card,
                         ft.Divider(color=theme.BORDER, height=1),
                         ft.Container(
-                            content=view_stream, alignment=ft.alignment.center,
+                            content=ft.Stack([placeholder_icon, camera, photo_preview], alignment=ft.alignment.center),
+                            width=280, height=280, alignment=ft.alignment.center,
                             bgcolor=theme.BG_SURFACE, border=ft.border.all(1, theme.BORDER),
-                            border_radius=theme.RADIUS_MD,
+                            border_radius=theme.RADIUS_MD, clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
                         ft.Row([capture_button, retake_button], alignment=ft.MainAxisAlignment.CENTER, spacing=10),
                         review_section,
