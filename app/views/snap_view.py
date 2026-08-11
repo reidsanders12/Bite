@@ -1,66 +1,67 @@
 """Camera snapshot layout module."""
+import base64
+
 import flet as ft
-import asyncio
+import flet_native_camera as fnc
 from app import theme
-from app.camera_engine import BLANK_FRAME_B64, CameraEngine
 from app import ai_engine
 
-camera_manager = CameraEngine()
-
 def build_snap_view(page: ft.Page, state) -> ft.View:
-    # An empty string here isn't a valid image source either -- Flet shows a
-    # red "Either src or src_base64 must be specified" error for any frame
-    # this is visible without a real one, so it needs an actual (blank)
-    # placeholder image until the first camera frame arrives.
-    view_stream = ft.Image(
-        src_base64=BLANK_FRAME_B64,
-        width=320,
-        height=320,
-        fit=ft.ImageFit.COVER,
-        border_radius=theme.RADIUS_MD,
+    # Visible -- lives inline in the preview box below, not page.overlay,
+    # since it renders a live viewfinder rather than just exposing methods.
+    camera = fnc.NativeCamera(width=320, height=320)
+
+    status_txt = ft.Text(
+        "Starting camera...", size=12, color=theme.TEXT_MUTED
+    )
+    placeholder_icon = ft.Icon(ft.Icons.CAMERA_ALT, size=64, color=theme.TEXT_FAINT)
+    photo_preview = ft.Image(
+        width=320, height=320, fit=ft.ImageFit.COVER,
+        border_radius=theme.RADIUS_MD, visible=False,
     )
 
-    status_txt = ft.Text("Camera Ready", size=12, color=theme.TEXT_MUTED)
+    def on_camera_error(e):
+        status_txt.value = f"Camera error: {e.data}"
+        status_txt.color = theme.ERROR
+        page.update()
 
-    # Context loop handler wrapping the async execution thread
-# Pass the stream function directly into Flet's background task runner
-    def start_capture_loop():
-        page.run_task(camera_manager.stream_views, view_stream, "snap")
+    camera.on_error = on_camera_error
+
+    async def start_camera():
+        started = await camera.start_async()
+        status_txt.value = "Ready." if started else "Couldn't start the camera."
+        status_txt.color = theme.TEXT_MUTED if started else theme.ERROR
+        page.update()
 
     async def on_snap_click(e):
-            # 1. Grab the raw un-nested binary frame sequence from your Camera manager
-            photo_bytes = camera_manager.get_captured_photo()
-            if not photo_bytes:
-                status_txt.value = "Failed to capture frame from viewport."
-                page.update()
-                return
-                
-            camera_manager.stop_camera()
-            status_txt.value = "Analyzing meal with AI..."
+        photo_bytes = await camera.take_picture_async()
+        if not photo_bytes:
+            status_txt.value = "No photo captured."
             page.update()
-            
-            try:
-                # 2. Pass the raw bytes + the caller's session token (the proxy
-                # verifies this token instead of trusting an embedded API key)
-                access_token = state.db.get_access_token()
-                macro_breakdown = await ai_engine.analyze_image(
-                    photo_bytes=photo_bytes, access_token=access_token
-                )
-                
-                # 3. Stage the result model cleanly in global state and proceed
-                state.set_pending(macro_breakdown, source="snap")
-                page.go("/confirm")
-                
-            except Exception as err:
-                status_txt.value = f"Analysis Error: {err}"
-                page.update()
+            return
+
+        await camera.stop_async()
+        photo_preview.src_base64 = base64.b64encode(photo_bytes).decode("utf-8")
+        photo_preview.visible = True
+        status_txt.value = "Analyzing meal with AI..."
+        page.update()
+
+        try:
+            access_token = state.db.get_access_token()
+            macro_breakdown = await ai_engine.analyze_image(
+                photo_bytes=photo_bytes, access_token=access_token
+            )
+            state.set_pending(macro_breakdown, source="snap")
+            page.go("/confirm")
+        except Exception as err:
+            status_txt.value = f"Analysis Error: {err}"
+            page.update()
 
     def handle_back(e):
-        camera_manager.stop_camera()
+        page.run_task(camera.stop_async)
         page.go("/")
 
-    # Fire capture stream immediately upon route load pipeline execution
-    start_capture_loop()
+    page.run_task(start_camera)
 
     return ft.View(
         route="/snap",
@@ -70,11 +71,14 @@ def build_snap_view(page: ft.Page, state) -> ft.View:
             ft.Container(
                 content=ft.Column([
                     ft.Container(
-                        content=view_stream,
+                        content=ft.Stack([placeholder_icon, camera, photo_preview], alignment=ft.alignment.center),
+                        width=320,
+                        height=320,
                         alignment=ft.alignment.center,
                         bgcolor=theme.BG_SURFACE,
                         border=ft.border.all(1, theme.BORDER),
                         border_radius=theme.RADIUS_MD,
+                        clip_behavior=ft.ClipBehavior.HARD_EDGE,
                     ),
                     status_txt,
                     ft.Row([

@@ -9,13 +9,13 @@ the fields here, but they stay fully editable and may be cleared.
 Public posts are anonymous by default ("Show my name" is opt-in); circle
 posts always show your name since a circle is your friend group.
 """
+import base64
+
 import flet as ft
+import flet_native_camera as fnc
 
 from app import moderation, theme
 from app.ai_engine import AIEngineError, analyze_image
-from app.camera_engine import BLANK_FRAME_B64, CameraEngine
-
-camera_manager = CameraEngine()
 
 # Placeholder resource -- confirm the exact org/hotline/wording with product
 # before shipping. Shown (not blocking, not shaming) whenever a post's own
@@ -46,13 +46,26 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         state.refresh_circles()
     circles = state.get_circles() if hasattr(state, "get_circles") else []
 
-    view_stream = ft.Image(
-        src_base64=BLANK_FRAME_B64, width=320, height=320,
-        fit=ft.ImageFit.COVER, border_radius=theme.RADIUS_MD,
-    )
-    status_txt = ft.Text("Camera Ready", size=12, color=theme.TEXT_MUTED)
+    # Visible -- lives inline in the preview box below, not page.overlay,
+    # since it renders a live viewfinder rather than just exposing methods.
+    camera = fnc.NativeCamera(width=320, height=320)
+    photo_preview = ft.Image(width=320, height=320, fit=ft.ImageFit.COVER, border_radius=theme.RADIUS_MD, visible=False)
+    status_txt = ft.Text("Starting camera...", size=12, color=theme.TEXT_MUTED)
     captured_bytes = {"value": None}
     visibility_state = {"value": "public"}
+
+    def on_camera_error(e):
+        status_txt.value = f"Camera error: {e.data}"
+        status_txt.color = theme.ERROR
+        page.update()
+
+    camera.on_error = on_camera_error
+
+    async def start_camera():
+        started = await camera.start_async()
+        status_txt.value = "Ready." if started else "Couldn't start the camera."
+        status_txt.color = theme.TEXT_MUTED if started else theme.ERROR
+        page.update()
 
     pending = getattr(state, "pending_breakdown", None)
     pending_items = getattr(pending, "identified_items", None) or []
@@ -201,17 +214,16 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         "Retake", icon=ft.Icons.REPLAY, style=ft.ButtonStyle(color=theme.TEXT_MUTED), visible=False,
     )
 
-    def start_capture_loop():
-        page.run_task(camera_manager.stream_views, view_stream, "snap")
-
     async def on_capture(e):
-        photo_bytes = camera_manager.get_captured_photo()
+        photo_bytes = await camera.take_picture_async()
         if not photo_bytes:
-            status_txt.value = "Failed to capture frame from viewport."
+            status_txt.value = "No photo captured."
             page.update()
             return
-        camera_manager.stop_camera()
+        await camera.stop_async()
         captured_bytes["value"] = photo_bytes
+        photo_preview.src_base64 = base64.b64encode(photo_bytes).decode("utf-8")
+        photo_preview.visible = True
         status_txt.value = "Photo captured"
         capture_button.visible = False
         retake_button.visible = True
@@ -219,16 +231,19 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         post_button.visible = True
         page.update()
 
-    def on_retake(e):
-        captured_bytes["value"] = None
-        status_txt.value = "Camera Ready"
-        status_txt.color = theme.TEXT_MUTED
+    async def on_retake(e):
+        photo_preview.visible = False
         capture_button.visible = True
         retake_button.visible = False
         review_section.visible = False
         post_button.visible = False
+        status_txt.value = "Starting camera..."
+        status_txt.color = theme.TEXT_MUTED
         page.update()
-        start_capture_loop()
+        started = await camera.start_async()
+        status_txt.value = "Ready." if started else "Couldn't restart the camera."
+        status_txt.color = theme.TEXT_MUTED if started else theme.ERROR
+        page.update()
 
     def _parse_macro(value: str):
         value = (value or "").strip()
@@ -239,7 +254,7 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         except ValueError:
             return None
 
-    def on_post(e):
+    async def on_post(e):
         if not captured_bytes["value"]:
             return
         visibility = visibility_state["value"]
@@ -271,6 +286,7 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
             (title_field.value or "").strip(), (ingredients_field.value or "").strip(),
         )
         if success:
+            await camera.stop_async()
             if was_flagged:
                 _show_support_dialog(page)
             else:
@@ -286,10 +302,12 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
     post_button.on_click = on_post
 
     def handle_back(e):
-        camera_manager.stop_camera()
+        page.run_task(camera.stop_async)
         page.go("/meal_feed")
 
-    start_capture_loop()
+    placeholder_icon = ft.Icon(ft.Icons.CAMERA_ALT, size=64, color=theme.TEXT_FAINT)
+
+    page.run_task(start_camera)
 
     return ft.View(
         route="/post_meal",
@@ -300,9 +318,10 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
                 content=ft.Column(
                     [
                         ft.Container(
-                            content=view_stream, alignment=ft.alignment.center,
+                            content=ft.Stack([placeholder_icon, camera, photo_preview], alignment=ft.alignment.center),
+                            width=320, height=320, alignment=ft.alignment.center,
                             bgcolor=theme.BG_SURFACE, border=ft.border.all(1, theme.BORDER),
-                            border_radius=theme.RADIUS_MD,
+                            border_radius=theme.RADIUS_MD, clip_behavior=ft.ClipBehavior.HARD_EDGE,
                         ),
                         status_txt,
                         ft.Row([capture_button, retake_button], alignment=ft.MainAxisAlignment.CENTER, spacing=10),

@@ -77,7 +77,7 @@ dark_color = "#FAF3EA"
 # (exempt encryption), so this skips the export-compliance question App
 # Store Connect would otherwise ask on every single submission.
 [tool.flet.ios.info]
-NSCameraUsageDescription = "Bite! uses your camera to snap photos of meals for AI calorie/macro estimates and to share photos to Meal Feed."
+NSCameraUsageDescription = "Bite! uses your camera to snap photos of meals for AI calorie/macro estimates, share photos to Meal Feed, take progress photos, and scan barcodes to look up nutrition info."
 NSMicrophoneUsageDescription = "Bite! uses your microphone to record a voice note that's transcribed into a food log entry."
 ITSAppUsesNonExemptEncryption = false
 # Profile -> Connect Health App (app/health_engine.py, flet-health). Read-only:
