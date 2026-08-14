@@ -1025,3 +1025,53 @@ create policy "progress_photo_reminders_update_own" on progress_photo_reminders
 drop policy if exists "progress_photo_reminders_delete_own" on progress_photo_reminders;
 create policy "progress_photo_reminders_delete_own" on progress_photo_reminders
     for delete to authenticated using (user_id = auth.uid());
+
+-- Water Tracker: a daily intake goal (single row per user, same shape as
+-- progress_photo_reminders above) plus a log of individual entries logged
+-- throughout the day (same shape as weight_logs), summed for "today's
+-- total" in water_view.py/home_view.py. The goal deliberately lives in its
+-- own table rather than as a column on user_goals -- profile_view.py/
+-- settings_view.py/survey_view.py all construct a fresh UserGoals(...)
+-- with only the macro fields set when saving calorie/macro targets, which
+-- would silently reset a daily_water_ml column back to its default on
+-- every unrelated goal save.
+create table if not exists water_goals (
+    user_id uuid primary key references auth.users(id) on delete cascade,
+    daily_ml integer not null default 2000,
+    updated_at timestamptz not null default now()
+);
+
+alter table water_goals enable row level security;
+
+drop policy if exists "water_goals_select_own" on water_goals;
+create policy "water_goals_select_own" on water_goals
+    for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists "water_goals_insert_own" on water_goals;
+create policy "water_goals_insert_own" on water_goals
+    for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists "water_goals_update_own" on water_goals;
+create policy "water_goals_update_own" on water_goals
+    for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+create table if not exists water_logs (
+    id bigint generated always as identity primary key,
+    user_id uuid not null references auth.users(id),
+    amount_ml integer not null,
+    created_at timestamptz not null default now()
+);
+
+alter table water_logs enable row level security;
+
+drop policy if exists "water_logs_select_own" on water_logs;
+create policy "water_logs_select_own" on water_logs
+    for select to authenticated using (user_id = auth.uid());
+
+drop policy if exists "water_logs_insert_own" on water_logs;
+create policy "water_logs_insert_own" on water_logs
+    for insert to authenticated with check (user_id = auth.uid());
+
+drop policy if exists "water_logs_delete_own" on water_logs;
+create policy "water_logs_delete_own" on water_logs
+    for delete to authenticated using (user_id = auth.uid());

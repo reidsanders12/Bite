@@ -13,15 +13,31 @@ rate, sleep, or any other vitals/body-measurement type: those are a more
 sensitive HealthKit category, draw more App Review scrutiny per type
 requested, and would need their own privacy-policy disclosure -- revisit
 together if the app ever wants that data, don't just add a type here.
+
+HEALTH_AVAILABLE: flet-health/flet-permission-handler are deliberately
+uninstalled as of 2026-08-13 (see requirements.txt) -- flet_health's
+`health` plugin crashes at app launch on real iOS hardware (EXC_BAD_ACCESS
+in SwiftHealthPlugin.register(with:), before Python even starts). Every
+function below raises HealthEngineError immediately when the package isn't
+installed, so callers that already handle that exception (health_view.py,
+home_view.py) degrade the same way they would for any other health-read
+failure, instead of the app failing to import/launch at all.
 """
+from __future__ import annotations
+
 import hashlib
 import logging
 from datetime import datetime
 from typing import Optional
 
-import flet_health as fh
-
 logger = logging.getLogger(__name__)
+
+try:
+    import flet_health as fh
+    HEALTH_AVAILABLE = True
+except ImportError:
+    fh = None
+    HEALTH_AVAILABLE = False
 
 # Every type below shares an identical name/value between
 # HealthDataTypeAndroid and HealthDataTypeIOS (confirmed against
@@ -35,7 +51,7 @@ _COMMON_READ_TYPES = [
     fh.HealthDataTypeAndroid.TOTAL_CALORIES_BURNED,
     fh.HealthDataTypeAndroid.FLIGHTS_CLIMBED,
     fh.HealthDataTypeAndroid.WORKOUT,
-]
+] if HEALTH_AVAILABLE else []
 
 
 def _distance_type(is_ios: bool):
@@ -65,12 +81,28 @@ def get_health_control(page, state) -> fh.Health:
     every visit) piles up duplicate controls in the same overlay Stack.
     Flutter renders one of the resulting duplicates as a broken gray
     placeholder instead of staying invisible -- reusing one instance for
-    the app's whole session avoids that."""
+    the app's whole session avoids that.
+
+    page.update() right after appending is required, not cosmetic: until
+    Flutter actually builds this control's widget, there's nothing on the
+    Dart side subscribed to handle invoke_method calls for it, so any query
+    made before that first flush silently fails (caught by callers'
+    broad except-and-ignore blocks). home_view.py's background health sync
+    hit this on every fresh app launch -- it runs via page.run_task() before
+    any other page.update() has happened yet, so the freshly-appended,
+    not-yet-mounted control's first query always failed quietly, making
+    Home's health section only ever appear after a same-session detour
+    through Connect Health App (whose synchronous view-build path happened
+    to already be followed by a page.update() from routing, by the time its
+    own queries ran)."""
+    if not HEALTH_AVAILABLE:
+        raise HealthEngineError("Health integration is not available in this build.")
     health = getattr(state, "_health_control", None)
     if health is None:
         health = fh.Health()
         page.overlay.append(health)
         state._health_control = health
+        page.update()
     return health
 
 

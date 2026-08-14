@@ -46,11 +46,15 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         state.refresh_circles()
     circles = state.get_circles() if hasattr(state, "get_circles") else []
 
-    # Visible -- lives inline in the preview box below, not page.overlay,
-    # since it renders a live viewfinder rather than just exposing methods.
-    camera = fnc.NativeCamera(width=320, height=320)
+    # SystemCamera hands the capture off to the OS's own Camera app instead
+    # of rendering a live in-app preview (NativeCamera's CameraController
+    # approach was unreliable on real devices) -- non-visual, so it lives in
+    # page.overlay like FilePicker, not inline in the layout below.
+    camera = fnc.SystemCamera()
+    page.overlay.append(camera)
     photo_preview = ft.Image(width=320, height=320, fit=ft.ImageFit.COVER, border_radius=theme.RADIUS_MD, visible=False)
-    status_txt = ft.Text("Starting camera...", size=12, color=theme.TEXT_MUTED)
+    placeholder_icon = ft.Icon(ft.Icons.CAMERA_ALT, size=64, color=theme.TEXT_FAINT)
+    status_txt = ft.Text("", size=12, color=theme.TEXT_MUTED)
     captured_bytes = {"value": None}
     visibility_state = {"value": "public"}
 
@@ -60,12 +64,6 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         page.update()
 
     camera.on_error = on_camera_error
-
-    async def start_camera():
-        started = await camera.start_async()
-        status_txt.value = "Ready." if started else "Couldn't start the camera."
-        status_txt.color = theme.TEXT_MUTED if started else theme.ERROR
-        page.update()
 
     pending = getattr(state, "pending_breakdown", None)
     pending_items = getattr(pending, "identified_items", None) or []
@@ -209,21 +207,27 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         spacing=14, visible=False,
     )
     post_button = theme.primary_button("Share", icon=ft.Icons.SEND_ROUNDED, visible=False)
-    capture_button = theme.primary_button("Capture Photo", icon=ft.Icons.CAMERA_ALT)
+    capture_button = theme.primary_button("Open Camera", icon=ft.Icons.CAMERA_ALT)
     retake_button = ft.TextButton(
         "Retake", icon=ft.Icons.REPLAY, style=ft.ButtonStyle(color=theme.TEXT_MUTED), visible=False,
     )
 
     async def on_capture(e):
+        capture_button.disabled = True
+        page.update()
+
         photo_bytes = await camera.take_picture_async()
+        capture_button.disabled = False
         if not photo_bytes:
-            status_txt.value = "No photo captured."
+            # User backed out of the system camera UI -- on_camera_error
+            # handles actual failures separately.
             page.update()
             return
-        await camera.stop_async()
+
         captured_bytes["value"] = photo_bytes
         photo_preview.src_base64 = base64.b64encode(photo_bytes).decode("utf-8")
         photo_preview.visible = True
+        placeholder_icon.visible = False
         status_txt.value = "Photo captured"
         capture_button.visible = False
         retake_button.visible = True
@@ -231,18 +235,14 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
         post_button.visible = True
         page.update()
 
-    async def on_retake(e):
+    def on_retake(e):
         photo_preview.visible = False
+        placeholder_icon.visible = True
         capture_button.visible = True
         retake_button.visible = False
         review_section.visible = False
         post_button.visible = False
-        status_txt.value = "Starting camera..."
-        status_txt.color = theme.TEXT_MUTED
-        page.update()
-        started = await camera.start_async()
-        status_txt.value = "Ready." if started else "Couldn't restart the camera."
-        status_txt.color = theme.TEXT_MUTED if started else theme.ERROR
+        status_txt.value = ""
         page.update()
 
     def _parse_macro(value: str):
@@ -286,7 +286,6 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
             (title_field.value or "").strip(), (ingredients_field.value or "").strip(),
         )
         if success:
-            await camera.stop_async()
             if was_flagged:
                 _show_support_dialog(page)
             else:
@@ -302,12 +301,7 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
     post_button.on_click = on_post
 
     def handle_back(e):
-        page.run_task(camera.stop_async)
         page.go("/meal_feed")
-
-    placeholder_icon = ft.Icon(ft.Icons.CAMERA_ALT, size=64, color=theme.TEXT_FAINT)
-
-    page.run_task(start_camera)
 
     return ft.View(
         route="/post_meal",
@@ -318,7 +312,7 @@ def build_post_meal_view(page: ft.Page, state) -> ft.View:
                 content=ft.Column(
                     [
                         ft.Container(
-                            content=ft.Stack([placeholder_icon, camera, photo_preview], alignment=ft.alignment.center),
+                            content=ft.Stack([placeholder_icon, photo_preview], alignment=ft.alignment.center),
                             width=320, height=320, alignment=ft.alignment.center,
                             bgcolor=theme.BG_SURFACE, border=ft.border.all(1, theme.BORDER),
                             border_radius=theme.RADIUS_MD, clip_behavior=ft.ClipBehavior.HARD_EDGE,

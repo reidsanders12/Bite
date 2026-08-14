@@ -45,7 +45,7 @@ org = "com.foodbite"
 # once already.
 [tool.flet.app]
 exclude = [
-    ".venv", ".git", ".github", ".gitignore",
+    ".venv", ".venv-old-0.28.3-backup", ".git", ".github", ".gitignore",
     ".pytest_cache", "__pycache__", ".DS_Store",
     "bite_tracker.db", "kickbacks-v2.vsix", "tests", "scripts",
 ]
@@ -130,8 +130,12 @@ min_sdk_version = 26
 # being able to test-build it is a real way to quietly break iOS signing,
 # that step is left as a one-time manual Xcode edit for whoever first does a
 # signed iOS build, not automated in this template fork.
-[tool.flet.template]
-dir = "/Users/reidsanders/Bite/flet-build-template"
+# TODO: fork was lost from disk (not recovered on this machine as of
+# 2026-08-13); falling back to stock template. Only affects Android
+# (Health Connect MainActivity.kt/AndroidManifest.xml patches) -- iOS
+# builds never used this fork's changes, per the note above.
+# [tool.flet.template]
+# dir = "/Users/reidsanders/Bite/flet-build-template"
 
 # flet 0.28.3's Flutter build template overrides `record` to ^5.1.1 (needed
 # by flet_audio_recorder), but the pub resolver still freely picks the

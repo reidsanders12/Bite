@@ -381,6 +381,12 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                         on_click=lambda _: page.go("/weight")
                     ),
                     ft.TextButton(
+                        "Water Tracker",
+                        icon=ft.Icons.WATER_DROP_OUTLINED,
+                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
+                        on_click=lambda _: page.go("/water")
+                    ),
+                    ft.TextButton(
                         "Personal Records",
                         icon=ft.Icons.EMOJI_EVENTS_OUTLINED,
                         style=ft.ButtonStyle(color=theme.TEXT_MUTED),

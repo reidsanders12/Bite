@@ -48,6 +48,8 @@ class AppState:
         self.reported_posts: list = []  # open reports joined with their post -- admin moderation screen
         self.progress_photos: list = []  # newest first, each with a signed `url` -- progress photos screen
         self.progress_photo_reminder: Optional[dict] = None  # {"remind_at": ...} or None
+        self.water_goal_ml: int = 2000  # daily water goal -- water tracker screen + home
+        self.water_logs_today: list = []  # today's water entries, newest first -- water tracker screen + home
         # Last-fetched Health summary (steps/active_calories/etc, see
         # health_engine.get_today_summary) -- home_view.py's async health
         # sync writes here so a SYNCHRONOUS rebuild (e.g. right after that
@@ -219,6 +221,63 @@ class AppState:
 
         self.weight_history = [
             log for log in self.weight_history
+            if (log.get("id") if isinstance(log, dict) else getattr(log, "id", None)) != entry_id
+        ]
+        return True, ""
+
+    def refresh_water_goal(self) -> None:
+        """Pulls the signed-in user's daily water goal, falling back to 2000mL."""
+        try:
+            self.water_goal_ml = self.db.get_water_goal()
+        except Exception as err:
+            logger.error("Water goal sync failed: %s", err)
+            self.water_goal_ml = 2000
+
+    def get_water_goal(self) -> int:
+        """Returns the cached daily water goal, in mL."""
+        return self.water_goal_ml
+
+    def set_water_goal(self, daily_ml: int) -> tuple[bool, str]:
+        """Saves a new daily water goal and updates the local cache."""
+        success, err = self.db.set_water_goal(daily_ml)
+        if success:
+            self.water_goal_ml = daily_ml
+        return success, err
+
+    def refresh_water_logs_today(self) -> None:
+        """Pulls today's water entries (local date), for the water tracker
+        screen and home dashboard's water progress meter."""
+        try:
+            self.water_logs_today = self.db.get_water_logs_for_date(date.today().isoformat())
+        except Exception as err:
+            logger.error("Water log sync failed: %s", err)
+            self.water_logs_today = []
+
+    def get_water_logs_today(self) -> list:
+        """Returns the cached list of today's water entries, newest first."""
+        return self.water_logs_today
+
+    def get_water_total_today_ml(self) -> int:
+        """Sums today's cached water entries -- the running total shown
+        against the daily goal."""
+        return sum(
+            (log.get("amount_ml", 0) if isinstance(log, dict) else getattr(log, "amount_ml", 0))
+            for log in self.water_logs_today
+        )
+
+    def log_water(self, amount_ml: int) -> None:
+        """Saves a new water entry and refreshes today's cache."""
+        self.db.log_water(amount_ml)
+        self.refresh_water_logs_today()
+
+    def remove_water_log(self, entry_id) -> tuple[bool, str]:
+        """Deletes a water entry from the cloud database and the local cache."""
+        success, err = self.db.delete_water_log(entry_id)
+        if not success:
+            return False, err
+
+        self.water_logs_today = [
+            log for log in self.water_logs_today
             if (log.get("id") if isinstance(log, dict) else getattr(log, "id", None)) != entry_id
         ]
         return True, ""

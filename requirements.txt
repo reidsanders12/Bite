@@ -30,12 +30,22 @@ flet-native-camera @ file:///Users/reidsanders/Bite/flet-native-camera
 # version confirmed to still work. See flet-dev/flet issues #4884 and #5603.
 websockets==13.0.1
 
-# Health App integration (Profile -> Connect Health App): wraps the Flutter
-# `health` package to read Apple HealthKit (iOS) / Health Connect (Android)
-# data. Requires flet>=0.25.2, which flet==0.28.3 above satisfies.
-# flet-permission-handler is its stated companion dependency for the
-# runtime OS permission prompts. Only meaningful on iOS/Android builds --
-# see app/health_engine.py and app/views/health_view.py.
+# Health App integration (Profile -> Connect Health App). Re-enabled
+# 2026-08-13 at the user's request after being pulled the same day: flet_health's
+# underlying `health` plugin (pinned to ^12.2.0 in flet_health's own
+# pubspec.yaml) previously crashed at app launch on real iOS hardware with
+# EXC_BAD_ACCESS/SIGSEGV in SwiftHealthPlugin.register(with:), before Python
+# ever started -- confirmed via device crash report (null pointer in
+# swift_getObjectType). flet_health itself is an unofficial community
+# package (its own pubspec points at placeholder repo
+# "MyGithubAccount/flet-health"). The deployment-target patch in
+# scripts/patch_ios_build_workarounds.py (13.0 -> 14.0, which `health`
+# requires) MUST be re-applied after every `flet build ipa` that regenerates
+# build/flutter/ios/, or pod install fails outright. app/health_engine.py's
+# HEALTH_AVAILABLE degrade-gracefully path (see its module docstring) is left
+# in place regardless, so a future problem here fails soft instead of
+# breaking app launch again. If this crashes again on-device, pull these two
+# lines and see health_engine.py's docstring for the fallback behavior.
 flet-health==0.1.2
 flet-permission-handler==0.1.0
 

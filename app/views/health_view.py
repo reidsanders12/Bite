@@ -10,19 +10,31 @@ of a broken Connect button.
 import flet as ft
 
 from app import theme
-from app.health_engine import HealthEngineError, get_health_control, get_today_summary, get_today_workouts, request_permission
+from app.health_engine import (
+    HEALTH_AVAILABLE,
+    HealthEngineError,
+    get_health_control,
+    get_today_summary,
+    get_today_workouts,
+    request_permission,
+)
 
 
 def build_health_view(page: ft.Page, state) -> ft.View:
-    supported = page.platform in (ft.PagePlatform.IOS, ft.PagePlatform.ANDROID)
+    supported = HEALTH_AVAILABLE and page.platform in (ft.PagePlatform.IOS, ft.PagePlatform.ANDROID)
 
     if not supported:
+        message = (
+            "Connect Health App isn't available in this build."
+            if not HEALTH_AVAILABLE else
+            "Connect Health App is only available in the iOS or Android app -- "
+            "Apple Health and Health Connect don't exist on this platform."
+        )
         body = ft.Column(
             [
                 ft.Icon(ft.Icons.FAVORITE_BORDER_ROUNDED, color=theme.TEXT_FAINT, size=28),
                 ft.Text(
-                    "Connect Health App is only available in the iOS or Android app -- "
-                    "Apple Health and Health Connect don't exist on this platform.",
+                    message,
                     size=13, color=theme.TEXT_FAINT, text_align=ft.TextAlign.CENTER,
                 ),
             ],
@@ -51,10 +63,17 @@ def build_health_view(page: ft.Page, state) -> ft.View:
     connect_button = theme.primary_button(f"Connect {label}", icon=ft.Icons.FAVORITE_ROUNDED)
 
     async def refresh_summary(silent: bool = False) -> bool:
-        """Loads today's summary + syncs workouts. Returns True if any real
-        data came back (meaning access was already granted on a past
-        visit). silent=True suppresses the error status text -- used for
-        the on-open auto-check below, so a first-ever visit (nothing
+        """Loads today's summary + syncs workouts. Returns True only if any
+        real data came back (meaning access was already granted on a past
+        visit) -- NOT just "the calls didn't raise", since HealthKit returns
+        empty/None for unauthorized types rather than an error (Apple's
+        privacy model hides *why* a read came back empty), so an
+        unauthorized first-ever visit looks identical to a successful-but-
+        quiet one unless tiles is actually checked. Getting this wrong
+        previously hid the Connect button on literally every visit,
+        including the very first, before the user ever got a chance to
+        grant access. silent=True suppresses the error status text -- used
+        for the on-open auto-check below, so a first-ever visit (nothing
         granted yet) fails quietly instead of greeting the user with a red
         error message before they've even tapped Connect."""
         try:
@@ -91,7 +110,13 @@ def build_health_view(page: ft.Page, state) -> ft.View:
             # tiles. Every other macro_tile() row in the app (e.g.
             # meal_feed_view.py) already omits wrap for the same reason.
             ft.Row(tiles, spacing=8) if tiles else ft.Text(
-                "No data yet -- log some activity in your Health app, then check back.",
+                "No data came back for today. If you already have Health data, this "
+                "usually means access wasn't actually granted for these types -- check "
+                "Settings > Health > Data Access & Devices > Bite! and make sure Steps, "
+                "Active Energy, Total (Resting) Energy, Flights Climbed, Walking + "
+                "Running Distance, and Workouts are all toggled on (iOS lets you deny "
+                "individual types in the permission sheet, and the app can't tell which "
+                "ones were denied or re-ask once you've responded once).",
                 size=12, color=theme.TEXT_FAINT, italic=True,
             ),
         ]
@@ -109,7 +134,7 @@ def build_health_view(page: ft.Page, state) -> ft.View:
             added = 0
         status_txt.color = theme.TEXT_MUTED
         status_txt.value = f"Synced {added} workout{'s' if added != 1 else ''} from {label}." if added else ""
-        return True
+        return bool(tiles)
 
     async def _load_if_already_connected():
         # Runs once on every visit to this screen, before the user touches

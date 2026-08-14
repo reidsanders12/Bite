@@ -32,6 +32,7 @@ from app.views.survey_view import build_survey_view
 from app.views.text_log_view import build_text_log_view
 from app.views.profile_view import build_profile_view
 from app.views.sponsor_requests_view import build_sponsor_requests_view
+from app.views.water_view import build_water_view
 from app.views.weight_view import build_weight_view
 from app.views.workout_history_view import build_workout_history_view
 
@@ -46,6 +47,7 @@ VIEW_BUILDERS = {
     "/log_workout": build_log_workout_view,
     "/workout_history": build_workout_history_view,
     "/weight": build_weight_view,
+    "/water": build_water_view,
     "/pr_tracker": build_pr_tracker_view,
     "/progress_photos": build_progress_photos_view,
     "/meal_feed": build_meal_feed_view,

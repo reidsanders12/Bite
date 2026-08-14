@@ -1,6 +1,7 @@
 """
 Main Home Dashboard View - Modern Minimalist Edition.
 """
+import asyncio
 import datetime
 import time
 
@@ -33,6 +34,10 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         state.refresh_sponsors()
     if hasattr(state, "refresh_progress_photo_reminder"):
         state.refresh_progress_photo_reminder()
+    if hasattr(state, "refresh_water_goal"):
+        state.refresh_water_goal()
+    if hasattr(state, "refresh_water_logs_today"):
+        state.refresh_water_logs_today()
 
     # No OS-level push notification fires this -- there's no verified,
     # iOS-tested Flet notification plugin available yet (see README). This
@@ -80,7 +85,23 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
         if page.platform not in (ft.PagePlatform.IOS, ft.PagePlatform.ANDROID):
             return
         try:
+            already_mounted = getattr(state, "_health_control", None) is not None
             health = get_health_control(page, state)
+            if not already_mounted:
+                # First mount of the Health() overlay control this session
+                # (e.g. right after a cold launch, before Connect Health App
+                # has ever run). get_health_control's own page.update()
+                # flushes the control to Flutter, but on-device testing
+                # still showed the very first query after a fresh app
+                # launch failing silently -- while the exact same query
+                # succeeded once Connect Health App had already primed a
+                # mounted instance earlier in the session (health_view.py's
+                # synchronous build path has much more real wall-clock time
+                # between mounting and querying, since a person has to
+                # actually see and tap something in between). Giving
+                # Flutter a moment to actually finish building the widget
+                # before invoking anything on it avoids that race.
+                await asyncio.sleep(0.5)
             is_ios = page.platform == ft.PagePlatform.IOS
 
             summary = await get_today_summary(health, is_ios)
@@ -256,8 +277,51 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                 on_click=lambda _: page.go("/weight"),
                 expand=True
             ),
+            ft.Container(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.WATER_DROP_OUTLINED, size=15, color=theme.TEXT_PRIMARY),
+                    ft.Text("Water", size=12, weight="w600")
+                ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+                bgcolor=theme.BG_SURFACE_ALT,
+                border=ft.border.all(1, theme.BORDER),
+                border_radius=theme.RADIUS_LG,
+                padding=ft.padding.symmetric(12, 10),
+                on_click=lambda _: page.go("/water"),
+                expand=True
+            ),
         ], spacing=10),
     ], spacing=10)
+
+    # Water progress -- unlike health_section, this is populated
+    # synchronously (refresh_water_goal/refresh_water_logs_today are plain
+    # DB reads, not the async Health API calls health_section needs to
+    # wait on), so it can just render directly instead of needing a
+    # placeholder + later page.update().
+    water_goal_ml = state.get_water_goal() if hasattr(state, "get_water_goal") else 2000
+    water_total_ml = state.get_water_total_today_ml() if hasattr(state, "get_water_total_today_ml") else 0
+    water_section = ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.WATER_DROP_ROUNDED, color=theme.ACCENT, size=20),
+                ft.Column(
+                    [
+                        ft.Text("WATER", size=10, color=theme.TEXT_FAINT, weight="bold"),
+                        ft.Text(f"{water_total_ml:,} / {water_goal_ml:,}mL", size=13, weight="w600", color=theme.TEXT_PRIMARY),
+                    ],
+                    spacing=2, expand=True,
+                ),
+                ft.ProgressBar(
+                    value=min(1.0, water_total_ml / max(1, water_goal_ml)), width=90, height=6,
+                    color=theme.ACCENT, bgcolor=ft.Colors.with_opacity(0.15, theme.ACCENT),
+                    border_radius=3,
+                ),
+            ],
+            spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+        bgcolor=theme.BG_SURFACE, border=ft.border.all(1, theme.BORDER),
+        border_radius=theme.RADIUS_LG, padding=ft.padding.symmetric(14, 14),
+        on_click=lambda e: page.go("/water"),
+    )
 
     # Progress Overview Box: calorie ring gauge + macro meters
     remaining_cal = max(0, adjusted_target_cal - consumed_cal)
@@ -703,6 +767,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                                 spacing=10,
                             ) if circles else ft.Container(),
                             health_section,
+                            water_section,
                             ft.Column(
                                 [
                                     ft.Row(
@@ -722,7 +787,7 @@ def build_home_view(page: ft.Page, state: AppState) -> ft.View:
                             ) if daily_workouts else ft.Container(),
                         ],
                         spacing=20,
-                    ) if (circles or daily_workouts) else health_section,
+                    ) if (circles or daily_workouts) else ft.Column([health_section, water_section], spacing=20),
                     # Sponsor promo moved up here (was after the food log
                     # timeline below) -- that list has no length cap and
                     # keeps growing across the day, so a sponsor slot placed

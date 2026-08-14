@@ -39,21 +39,18 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
     photos = state.get_progress_photos() if hasattr(state, "get_progress_photos") else []
     reminder = state.get_progress_photo_reminder() if hasattr(state, "get_progress_photo_reminder") else None
 
-    # Front/selfie camera -- unlike the old CameraEngine(camera_index=1),
-    # lens_direction="front" is a real, documented selector passed to the
-    # camera plugin's CameraDescription.lensDirection, not a guess at index
-    # ordering. Visible -- lives inline in the preview box below.
-    camera = fnc.NativeCamera(lens_direction=fnc.LensDirection.FRONT, width=280, height=280)
+    # SystemCamera hands the capture off to the OS's own Camera app instead
+    # of rendering a live in-app preview (NativeCamera's CameraController
+    # approach was unreliable on real devices) -- non-visual, so it lives in
+    # page.overlay like FilePicker, not inline in the layout below.
+    # lens_direction=FRONT is only a preference for which camera the system
+    # app opens to -- the user can still flip it there.
+    camera = fnc.SystemCamera(lens_direction=fnc.LensDirection.FRONT)
+    page.overlay.append(camera)
 
     def rerender() -> None:
-        # Stop explicitly before tearing down this view's widget tree --
-        # relying on widget-disposal timing alone risks the new view's
-        # camera starting before this one's AVCaptureSession is released.
-        async def _rerender():
-            await camera.stop_async()
-            page.views[-1] = build_progress_photos_view(page, state)
-            page.update()
-        page.run_task(_rerender)
+        page.views[-1] = build_progress_photos_view(page, state)
+        page.update()
 
     status_txt = ft.Text("", size=12)
 
@@ -144,7 +141,7 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
     photo_preview = ft.Image(width=280, height=280, fit=ft.ImageFit.COVER, border_radius=theme.RADIUS_MD, visible=False)
     placeholder_icon = ft.Icon(ft.Icons.CAMERA_ALT, size=64, color=theme.TEXT_FAINT)
 
-    capture_button = theme.primary_button("Capture Photo", icon=ft.Icons.CAMERA_ALT)
+    capture_button = theme.primary_button("Open Camera", icon=ft.Icons.CAMERA_ALT)
     retake_button = ft.TextButton(
         "Retake", icon=ft.Icons.REPLAY, style=ft.ButtonStyle(color=theme.TEXT_MUTED), visible=False,
     )
@@ -156,36 +153,36 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
 
     camera.on_error = on_camera_error
 
-    async def start_camera():
-        started = await camera.start_async()
-        if not started:
-            show_status("Couldn't start the camera.", ok=False)
-
     async def on_capture(e):
+        capture_button.disabled = True
+        page.update()
+
         photo_bytes = await camera.take_picture_async()
+        capture_button.disabled = False
         if not photo_bytes:
-            show_status("No photo captured.", ok=False)
+            # User backed out of the system camera UI without taking a
+            # shot -- on_camera_error handles actual failures separately.
+            page.update()
             return
-        await camera.stop_async()
+
         captured_bytes["value"] = photo_bytes
         photo_preview.src_base64 = base64.b64encode(photo_bytes).decode("utf-8")
         photo_preview.visible = True
+        placeholder_icon.visible = False
         capture_button.visible = False
         retake_button.visible = True
         review_section.visible = True
         save_button.visible = True
         page.update()
 
-    async def on_retake(e):
+    def on_retake(e):
         photo_preview.visible = False
+        placeholder_icon.visible = True
         capture_button.visible = True
         retake_button.visible = False
         review_section.visible = False
         save_button.visible = False
         page.update()
-        started = await camera.start_async()
-        if not started:
-            show_status("Couldn't restart the camera.", ok=False)
 
     def on_save(e):
         if not captured_bytes["value"]:
@@ -249,10 +246,7 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
         )
 
     def handle_back(e):
-        page.run_task(camera.stop_async)
         page.go("/profile")
-
-    page.run_task(start_camera)
 
     return ft.View(
         route="/progress_photos",
@@ -265,7 +259,7 @@ def build_progress_photos_view(page: ft.Page, state) -> ft.View:
                         reminder_card,
                         ft.Divider(color=theme.BORDER, height=1),
                         ft.Container(
-                            content=ft.Stack([placeholder_icon, camera, photo_preview], alignment=ft.alignment.center),
+                            content=ft.Stack([placeholder_icon, photo_preview], alignment=ft.alignment.center),
                             width=280, height=280, alignment=ft.alignment.center,
                             bgcolor=theme.BG_SURFACE, border=ft.border.all(1, theme.BORDER),
                             border_radius=theme.RADIUS_MD, clip_behavior=ft.ClipBehavior.HARD_EDGE,

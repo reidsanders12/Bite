@@ -1,0 +1,69 @@
+Metadata-Version: 2.2
+Name: flet-permission-handler
+Version: 0.1.0
+Summary: PermissionHandler control for Flet
+Author-email: Flet contributors <hello@flet.dev>
+Project-URL: Homepage, https://flet.dev
+Project-URL: Documentation, https://flet.dev/docs/controls/permissionhandler/
+Project-URL: Repository, https://github.com/flet-dev/flet-permission-handler
+Project-URL: Issues, https://github.com/flet-dev/flet-permission-handler/issues
+Classifier: License :: OSI Approved :: Apache Software License
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: flet>=0.25.2
+
+# PermissionHandler control for Flet
+
+`PermissionHandler` control for Flet.
+
+## Usage
+
+Add `flet-permission-handler` as dependency (`pyproject.toml` or `requirements.txt`) to your Flet project.
+
+## Example
+
+```py
+
+import flet as ft
+
+import flet_permission_handler as fph
+
+
+def main(page: ft.Page):
+    page.scroll = ft.ScrollMode.ADAPTIVE
+    page.appbar = ft.AppBar(title=ft.Text("PermissionHandler Tests"))
+    ph = fph.PermissionHandler()
+    page.overlay.append(ph)
+
+    def check_permission(e):
+        o = ph.check_permission(e.control.data)
+        page.add(ft.Text(f"Checked {e.control.data.name}: {o}"))
+
+    def request_permission(e):
+        o = ph.request_permission(e.control.data)
+        page.add(ft.Text(f"Requested {e.control.data.name}: {o}"))
+
+    def open_app_settings(e):
+        o = ph.open_app_settings()
+        page.add(ft.Text(f"App Settings: {o}"))
+
+    page.add(
+        ft.OutlinedButton(
+            "Check Microphone Permission",
+            data=fph.PermissionType.MICROPHONE,
+            on_click=check_permission,
+        ),
+        ft.OutlinedButton(
+            "Request Microphone Permission",
+            data=fph.PermissionType.MICROPHONE,
+            on_click=request_permission,
+        ),
+        ft.OutlinedButton(
+            "Open App Settings",
+            on_click=open_app_settings,
+        ),
+    )
+
+
+ft.app(main)
+```

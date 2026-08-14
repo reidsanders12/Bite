@@ -1,10 +1,13 @@
 """
-Barcode & Ingredient Lookup view with integrated Live Camera Barcode Scanning.
-Exercises public Open Food Facts API and USDA FoodData Central pipelines.
+Barcode & Ingredient Lookup view. Barcode scanning hands off to the system
+camera app for a photo, then decodes it -- see the scanner/camera setup
+below for why (a live in-app scanner preview proved unreliable on real
+hardware, twice). Exercises public Open Food Facts API and USDA FoodData
+Central pipelines.
 """
 
-import asyncio
-import logging
+import os
+import tempfile
 
 import flet as ft
 import flet_native_camera as fnc
@@ -16,8 +19,6 @@ from app.models import MacroBreakdown
 from app.state import AppState
 from app.views.widgets import error_banner, loading_view
 
-logger = logging.getLogger(__name__)
-
 
 def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
     if hasattr(state, "refresh_sponsor_meal_items"):
@@ -25,7 +26,6 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
 
     # State tracking variables
     current_tab = [0]  # Scoped array reference pointer to avoid nonlocal binding mismatch
-    camera_active = [False]
 
     # Persistent layout container targeting rendering segments
     tabs_content = ft.Container()
@@ -44,29 +44,30 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         **theme.styled_field(),
     )
 
-    scanner = fnc.BarcodeScanner(width=320, height=200)
-    # BarcodeScanner has no border_radius of its own (unlike the old
-    # ft.Image), so a clipping Container provides the rounded corners; its
-    # visibility -- not scanner.visible -- is what's toggled on start/stop.
-    scanner_container = ft.Container(
-        content=scanner,
-        width=320,
-        height=200,
-        border_radius=theme.RADIUS_MD,
-        clip_behavior=ft.ClipBehavior.HARD_EDGE,
-        bgcolor=theme.BG_SURFACE,
-        visible=False,
-    )
+    # Both non-visual (live in page.overlay, like FilePicker) -- barcode
+    # scanning here is a hand-off-to-the-system-camera-app-then-decode-the-
+    # photo flow, not a live in-app preview. The live preview (embedded
+    # MobileScanner platform view) proved unreliable on real hardware,
+    # twice (once plain, once with Flutter's Impeller renderer disabled):
+    # iOS showed the camera-in-use indicator (so the AVCaptureSession really
+    # was running) while the preview itself stayed solid black -- a Flutter
+    # platform-view compositing issue, the same class of bug that made the
+    # old live NativeCamera preview unreliable for Snap/Post a Meal/Progress
+    # Photos (see those views' SystemCamera usage). scanner.analyze_image
+    # decodes a still photo instead of needing any live preview at all.
+    camera = fnc.SystemCamera()
+    scanner = fnc.BarcodeScanner()
+    page.overlay.append(camera)
+    page.overlay.append(scanner)
 
     scan_btn = theme.primary_button(
-        "Live Scan Barcode",
+        "Scan Barcode",
         icon=ft.Icons.CAMERA_ALT_ROUNDED,
-        on_click=lambda e: toggle_barcode_camera()
+        on_click=lambda e: page.run_task(scan_barcode_photo)
     )
 
     # 2. Execution Queries
     async def on_barcode_search(e):
-        stop_barcode_camera()
         code = barcode_field.value.strip()
         if not code:
             return
@@ -105,80 +106,55 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
     usda_field.on_submit = lambda e: page.run_task(on_usda_search, e)
 
     # 3. Barcode Scanning Pipeline Runtime Hooks
-    async def handle_detected_barcode(e: fnc.BarcodeDetectEvent):
-        scanned_code = e.code
-        try:
-            barcode_field.value = scanned_code
-            # Reset the scan button/flag directly rather than calling
-            # stop_barcode_camera() -- the scanner already released the
-            # camera itself the instant it fired this event (see
-            # flet_native_camera's barcode_scanner.dart), so there's nothing
-            # left to stop here, just UI state to reconcile. Unlike the old
-            # OpenCV-based camera, the preview goes blank rather than
-            # freezing on the last frame -- mobile_scanner has no
-            # freeze-frame API -- but the decoded value below still confirms
-            # what was scanned.
-            camera_active[0] = False
-            scan_btn.text = "Live Scan Barcode"
-            scan_btn.style = ft.ButtonStyle(bgcolor=theme.ACCENT, color=theme.ACCENT_ON)
-            page.update()
-            await on_barcode_search(None)
-        except Exception as exc:
-            # Belt-and-suspenders: on_barcode_search already catches its own
-            # lookup errors and shows a banner, so this only fires for
-            # something unexpected (e.g. a UI update failing). Previously an
-            # error here had nowhere to go and vanished silently, leaving a
-            # stopped camera with no result and no explanation.
-            logger.exception("Failed to process detected barcode %r", scanned_code)
-            results_area.controls = [
-                error_banner(f"Scanned {scanned_code}, but couldn't look it up: {exc}")
-            ]
-            page.update()
-
-    scanner.on_detect = lambda e: page.run_task(handle_detected_barcode, e)
-
     def on_scanner_error(e):
-        camera_active[0] = False
-        scan_btn.text = "Live Scan Barcode"
-        scan_btn.style = ft.ButtonStyle(bgcolor=theme.ACCENT, color=theme.ACCENT_ON)
-        scanner_container.visible = False
-        results_area.controls = [error_banner(f"Camera error: {e.data}")]
+        results_area.controls = [error_banner(f"Couldn't decode barcode: {e.data}")]
         page.update()
 
     scanner.on_error = on_scanner_error
 
-    async def start_barcode_camera():
-        camera_active[0] = True
-        scan_btn.text = "Stop Scanner"
-        scan_btn.style = ft.ButtonStyle(bgcolor=theme.ERROR, color=theme.TEXT_PRIMARY)
-        scanner_container.visible = True
+    def on_camera_error(e):
+        results_area.controls = [error_banner(f"Camera error: {e.data}")]
         page.update()
 
-        started = await scanner.start_async()
-        if not started:
-            camera_active[0] = False
-            scan_btn.text = "Live Scan Barcode"
-            scan_btn.style = ft.ButtonStyle(bgcolor=theme.ACCENT, color=theme.ACCENT_ON)
-            scanner_container.visible = False
+    camera.on_error = on_camera_error
+
+    async def scan_barcode_photo():
+        scan_btn.disabled = True
+        page.update()
+
+        photo_bytes = await camera.take_picture_async()
+        if not photo_bytes:
+            # User backed out of the system camera UI -- not a failure,
+            # on_camera_error handles actual errors separately.
+            scan_btn.disabled = False
+            page.update()
+            return
+
+        results_area.controls = [loading_view("Decoding barcode...")]
+        page.update()
+
+        fd, path = tempfile.mkstemp(suffix=".jpg")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(photo_bytes)
+            code = await scanner.analyze_image_async(path)
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+        scan_btn.disabled = False
+        if not code:
             results_area.controls = [
-                error_banner("Couldn't start the camera. Check camera permission in Settings.")
+                error_banner("No barcode found in that photo -- try again with the barcode centered and in focus.")
             ]
             page.update()
+            return
 
-    def toggle_barcode_camera():
-        if not camera_active[0]:
-            page.run_task(start_barcode_camera)
-        else:
-            stop_barcode_camera()
-
-    def stop_barcode_camera():
-        if camera_active[0]:
-            camera_active[0] = False
-            scan_btn.text = "Live Scan Barcode"
-            scan_btn.style = ft.ButtonStyle(bgcolor=theme.ACCENT, color=theme.ACCENT_ON)
-            scanner_container.visible = False
-            scanner.stop()
-            page.update()
+        barcode_field.value = code
+        page.update()
+        await on_barcode_search(None)
 
     # 4. Content Block Generation Factory Primitives
     def build_barcode_tab():
@@ -194,7 +170,6 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
                 ], spacing=5),
                 ft.Divider(color="transparent", height=5),
                 ft.Row([scan_btn], alignment=ft.MainAxisAlignment.CENTER),
-                ft.Row([scanner_container], alignment=ft.MainAxisAlignment.CENTER),
                 ft.Text(
                     "Looks up packaged products via Open Food Facts api mappings.",
                     size=11,
@@ -244,7 +219,6 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
     ]
 
     def update_tab_ui():
-        stop_barcode_camera()
         results_area.controls = []
 
         for index, (btn, builder) in enumerate(tabs):
@@ -298,7 +272,6 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
                     icon=ft.Icons.ARROW_BACK_IOS_NEW_ROUNDED,
                     icon_color=theme.TEXT_MUTED,
                     on_click=lambda _: [
-                        stop_barcode_camera(),
                         page.views.clear(),  # Destroys navigation route history references
                         page.go("/")         # Forces clean dashboard view rebuild pipeline
                     ]

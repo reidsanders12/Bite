@@ -777,6 +777,98 @@ class Database:
             # end user, who has no use for an RLS policy name or table name).
             return False, "Something went wrong -- please try again."
 
+    # --- WATER TRACKER ---
+    #
+    # Goal lives in its own single-row-per-user table (water_goals), not as
+    # a column on user_goals -- profile_view.py/settings_view.py/survey_view.py
+    # all construct a fresh UserGoals(...) with only the macro fields set
+    # when saving calorie/macro targets, which would silently reset a
+    # daily_water_ml column back to its default on every unrelated goal
+    # save. water_goals has a real primary key (user_id), so upsert() is
+    # safe here (unlike save_goals's manual select-then-write, done because
+    # user_goals has no guaranteed unique constraint).
+
+    def get_water_goal(self) -> int:
+        """Returns the caller's daily water goal in mL, defaulting to 2000
+        if never set."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return 2000
+        try:
+            resp = (
+                self.client.table("water_goals")
+                .select("daily_ml")
+                .eq("user_id", uid)
+                .maybe_single()
+                .execute()
+            )
+            return resp.data["daily_ml"] if resp and resp.data else 2000
+        except Exception as e:
+            logger.error(f"Failed to fetch water goal: {e}")
+            return 2000
+
+    def set_water_goal(self, daily_ml: int) -> tuple[bool, str]:
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+        try:
+            self.client.table("water_goals").upsert(
+                {"user_id": uid, "daily_ml": int(daily_ml)}, on_conflict="user_id"
+            ).execute()
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to set water goal: {e}")
+            return False, "Couldn't save goal -- please try again."
+
+    def log_water(self, amount_ml: int) -> None:
+        uid = self.get_current_user_id()
+        if not uid:
+            logger.error("Aborting water log write: No active user session.")
+            return
+        try:
+            self.client.table("water_logs").insert({
+                "user_id": uid,
+                "amount_ml": int(amount_ml),
+            }).execute()
+        except Exception as e:
+            logger.error(f"Failed to log water: {e}")
+
+    def get_water_logs_for_date(self, date_iso: str) -> List[dict]:
+        """Fetches the caller's water entries created on the given local date."""
+        uid = self.get_current_user_id()
+        if not uid:
+            return []
+        try:
+            response = (
+                self.client.table("water_logs")
+                .select("*")
+                .eq("user_id", uid)
+                .gte("created_at", f"{date_iso}T00:00:00")
+                .lte("created_at", f"{date_iso}T23:59:59.999999")
+                .order("id", desc=True)
+                .execute()
+            )
+            return response.data or []
+        except Exception as e:
+            logger.error(f"Failed to fetch today's water logs: {e}")
+            return []
+
+    def delete_water_log(self, entry_id: int) -> tuple[bool, str]:
+        uid = self.get_current_user_id()
+        if not uid:
+            return False, "No active user session."
+        try:
+            response = (
+                self.client.table("water_logs").delete().eq("id", entry_id).eq("user_id", uid).execute()
+            )
+            if not response.data:
+                logger.error("Delete was blocked (0 rows affected) -- check the DELETE RLS policy on water_logs.")
+                return False, "Couldn't delete that entry -- please try again."
+            return True, ""
+        except Exception as e:
+            logger.error(f"Failed to delete water log: {e}")
+            return False, "Something went wrong -- please try again."
+
     # --- PERSONAL RECORDS ---
 
     @staticmethod
