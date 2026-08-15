@@ -3,6 +3,8 @@ AI Coach: a chat-based trainer/nutritionist that already knows your remaining
 macro budget for today and (optionally) what you've told it about your
 fitness goals, so it can suggest a meal that fits or build you a workout.
 """
+import asyncio
+
 import flet as ft
 from app import theme
 from app.state import AppState
@@ -114,18 +116,56 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
         goals_status.value = "Saved"
         page.update()
 
-    chat_list = ft.ListView(expand=True, spacing=12, padding=10, auto_scroll=True)
+    # Scrolls within its own bounded-height container below (unlike the
+    # expand=True ListView this used to be, which had no bounded height of
+    # its own -- see the height comment on that container). body_column
+    # being scrollable too is what actually fixes the keyboard bug: if the
+    # "still available today"/goals cards plus the keyboard inset ever
+    # leave less room than the fixed layout needs, the whole page scrolls
+    # instead of overflowing and clipping chat_input off-screen.
+    chat_list = ft.Column(spacing=12, scroll=ft.ScrollMode.ADAPTIVE)
     chat_input = ft.TextField(
         hint_text="Ask about programming, recovery, recipes...",
         expand=True,
         **theme.styled_field(),
     )
 
+    # Gemini's free-form chat replies (chat_with_coach) come back as
+    # markdown prose -- **bold** exercise names, numbered/bulleted steps,
+    # the odd heading -- since that's just how it writes, not something we
+    # explicitly ask for (suggest_meal/suggest_workout sidestep this by
+    # forcing a JSON response_schema instead of free text). Rendering AI
+    # bubbles with ft.Markdown instead of plain ft.Text is what actually
+    # turns that into bold text/real lists rather than showing the raw
+    # "**"/"-" characters. User messages stay plain Text -- they're typed,
+    # not markdown, and don't need parsing.
+    _coach_markdown_style = ft.MarkdownStyleSheet(
+        p_text_style=ft.TextStyle(color=theme.TEXT_PRIMARY, size=14),
+        strong_text_style=ft.TextStyle(color=theme.TEXT_PRIMARY, size=14, weight=ft.FontWeight.BOLD),
+        em_text_style=ft.TextStyle(color=theme.TEXT_PRIMARY, size=14, italic=True),
+        h1_text_style=ft.TextStyle(color=theme.TEXT_PRIMARY, size=17, weight=ft.FontWeight.BOLD),
+        h2_text_style=ft.TextStyle(color=theme.TEXT_PRIMARY, size=16, weight=ft.FontWeight.BOLD),
+        h3_text_style=ft.TextStyle(color=theme.TEXT_PRIMARY, size=15, weight=ft.FontWeight.BOLD),
+        list_bullet_text_style=ft.TextStyle(color=theme.ACCENT, size=14, weight=ft.FontWeight.BOLD),
+        code_text_style=ft.TextStyle(color=theme.TEXT_PRIMARY, size=13, font_family="monospace"),
+        block_spacing=6,
+    )
+
     def render_bubble(text: str, is_user: bool) -> ft.Control:
+        bubble_content = (
+            ft.Text(text, color=theme.TEXT_PRIMARY, size=14)
+            if is_user
+            else ft.Markdown(
+                text,
+                selectable=True,
+                soft_line_break=True,
+                md_style_sheet=_coach_markdown_style,
+            )
+        )
         return ft.Row(
             controls=[
                 ft.Container(
-                    content=ft.Text(text, color=theme.TEXT_PRIMARY, size=14),
+                    content=bubble_content,
                     bgcolor=theme.BG_SURFACE_ALT if is_user else theme.BG_SURFACE,
                     padding=14,
                     border_radius=ft.border_radius.only(
@@ -308,6 +348,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
         loader = ft.Row([ft.ProgressRing(width=20, height=20, color=theme.ACCENT)], alignment=ft.MainAxisAlignment.START)
         chat_list.controls.append(loader)
         page.update()
+        _scroll_chat_into_view()
 
         try:
             reply = await chat_with_coach(
@@ -331,6 +372,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
             chat_list.controls.append(render_bubble(f"Coach link failure: {err}", is_user=False))
 
         page.update()
+        _scroll_chat_into_view()
 
     async def on_send_click(e):
         await send_text(chat_input.value or "")
@@ -343,6 +385,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
         loader = ft.Row([ft.ProgressRing(width=20, height=20, color=theme.ACCENT)], alignment=ft.MainAxisAlignment.START)
         chat_list.controls.append(loader)
         page.update()
+        _scroll_chat_into_view()
 
         try:
             suggestion = await suggest_meal(
@@ -366,6 +409,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
             chat_list.controls.append(render_bubble(f"Coach link failure: {err}", is_user=False))
 
         page.update()
+        _scroll_chat_into_view()
 
     async def on_suggest_workout(e):
         user_label = "Suggest a workout"
@@ -375,6 +419,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
         loader = ft.Row([ft.ProgressRing(width=20, height=20, color=theme.ACCENT)], alignment=ft.MainAxisAlignment.START)
         chat_list.controls.append(loader)
         page.update()
+        _scroll_chat_into_view()
 
         try:
             plan = await suggest_workout(
@@ -402,8 +447,125 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
             chat_list.controls.append(render_bubble(f"Coach link failure: {err}", is_user=False))
 
         page.update()
+        _scroll_chat_into_view()
 
     chat_input.on_submit = lambda e: page.run_task(on_send_click, e)
+
+    def _scroll_chat_into_view():
+        # Called after every new bubble/card: chat_list scrolls to its own
+        # bottom so the newest message is visible within the chat box, and
+        # body_column scrolls to ITS bottom so the input row (and, while
+        # typing, chat_input itself) stays visible above the on-screen
+        # keyboard rather than getting clipped off-screen behind it.
+        chat_list.scroll_to(offset=-1, duration=200)
+        body_column.scroll_to(offset=-1, duration=200)
+
+    body_column = ft.Column(
+        [
+            theme.surface_card(
+                ft.Column(
+                    [
+                        ft.Text("Still available today", size=13, weight="bold", color=theme.TEXT_PRIMARY),
+                        ft.Row(
+                            [kcal_tile, protein_tile, carbs_tile, fat_tile],
+                            spacing=8,
+                        ),
+                    ],
+                    spacing=10,
+                ),
+                padding=16,
+            ),
+            theme.surface_card(
+                ft.Column(
+                    [
+                        ft.Text("Your fitness goals", size=13, weight="bold", color=theme.TEXT_PRIMARY),
+                        ft.Text(
+                            "Tell the coach once — it'll remember this for every meal and workout suggestion.",
+                            size=11, color=theme.TEXT_MUTED,
+                        ),
+                        goals_field,
+                        ft.Row(
+                            [
+                                goals_status,
+                                ft.TextButton(
+                                    "Save goals",
+                                    style=ft.ButtonStyle(color=theme.ACCENT),
+                                    on_click=save_goals_text,
+                                ),
+                            ],
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        ),
+                    ],
+                    spacing=6,
+                ),
+                padding=16,
+            ),
+            ft.Row(
+                [
+                    ft.OutlinedButton(
+                        "Suggest a meal",
+                        icon=ft.Icons.RESTAURANT_MENU,
+                        on_click=lambda e: page.run_task(on_suggest_meal, e),
+                        expand=True,
+                    ),
+                    ft.OutlinedButton(
+                        "Suggest a workout",
+                        icon=ft.Icons.FITNESS_CENTER,
+                        on_click=lambda e: page.run_task(on_suggest_workout, e),
+                        expand=True,
+                    ),
+                ],
+                spacing=10,
+            ),
+            ft.Container(
+                # expand=True doesn't work here the way it used to -- inside
+                # body_column's own scroll (needed for the keyboard fix,
+                # see the comment on chat_list above), an expand child has
+                # no bounded height to expand into, so it collapsed down to
+                # its content's intrinsic size instead of filling the
+                # screen like before. An explicit height, sized off the
+                # device's actual viewport, gets back the "fills most of
+                # the screen" feel without needing an unbounded expand.
+                content=chat_list,
+                height=max(280, int((page.height or 700) - 340)),
+                bgcolor=theme.BG_SURFACE,
+                border=ft.border.all(1, theme.BORDER),
+                border_radius=theme.RADIUS_MD,
+                padding=10,
+            ),
+            ft.Row(
+                [
+                    chat_input,
+                    ft.IconButton(
+                        icon=ft.Icons.SEND,
+                        icon_color=theme.ACCENT,
+                        on_click=lambda e: page.run_task(on_send_click, e),
+                    ),
+                ],
+                spacing=10,
+            ),
+        ],
+        spacing=14,
+        expand=True,
+        scroll=ft.ScrollMode.ADAPTIVE,
+        # Explicit stretch, not relied-on default behavior: the chat box's
+        # scrollable content (chat_list) otherwise has no width of its own
+        # to size against and was rendering skinny -- shrink-wrapped to
+        # roughly a bubble's width instead of filling the screen -- once it
+        # stopped being an expand=True child (see the height comment below).
+        horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+    )
+
+    if chat_list.controls:
+        async def _jump_to_bottom_on_mount():
+            # Mirrors the old ListView(auto_scroll=True)'s behavior of
+            # opening already scrolled to the newest message -- needs a
+            # beat after mount before body_column has a real scroll extent
+            # to jump to.
+            await asyncio.sleep(0.05)
+            chat_list.scroll_to(offset=-1, duration=0)
+
+        page.run_task(_jump_to_bottom_on_mount)
 
     return ft.View(
         route="/coach",
@@ -417,86 +579,7 @@ def build_coach_view(page: ft.Page, state: AppState) -> ft.View:
             ft.Container(
                 expand=True,
                 padding=20,
-                content=ft.Column(
-                    [
-                        theme.surface_card(
-                            ft.Column(
-                                [
-                                    ft.Text("Still available today", size=13, weight="bold", color=theme.TEXT_PRIMARY),
-                                    ft.Row(
-                                        [kcal_tile, protein_tile, carbs_tile, fat_tile],
-                                        spacing=8,
-                                    ),
-                                ],
-                                spacing=10,
-                            ),
-                            padding=16,
-                        ),
-                        theme.surface_card(
-                            ft.Column(
-                                [
-                                    ft.Text("Your fitness goals", size=13, weight="bold", color=theme.TEXT_PRIMARY),
-                                    ft.Text(
-                                        "Tell the coach once — it'll remember this for every meal and workout suggestion.",
-                                        size=11, color=theme.TEXT_MUTED,
-                                    ),
-                                    goals_field,
-                                    ft.Row(
-                                        [
-                                            goals_status,
-                                            ft.TextButton(
-                                                "Save goals",
-                                                style=ft.ButtonStyle(color=theme.ACCENT),
-                                                on_click=save_goals_text,
-                                            ),
-                                        ],
-                                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                    ),
-                                ],
-                                spacing=6,
-                            ),
-                            padding=16,
-                        ),
-                        ft.Row(
-                            [
-                                ft.OutlinedButton(
-                                    "Suggest a meal",
-                                    icon=ft.Icons.RESTAURANT_MENU,
-                                    on_click=lambda e: page.run_task(on_suggest_meal, e),
-                                    expand=True,
-                                ),
-                                ft.OutlinedButton(
-                                    "Suggest a workout",
-                                    icon=ft.Icons.FITNESS_CENTER,
-                                    on_click=lambda e: page.run_task(on_suggest_workout, e),
-                                    expand=True,
-                                ),
-                            ],
-                            spacing=10,
-                        ),
-                        ft.Container(
-                            content=chat_list,
-                            expand=True,
-                            bgcolor=theme.BG_SURFACE,
-                            border=ft.border.all(1, theme.BORDER),
-                            border_radius=theme.RADIUS_MD,
-                            padding=10,
-                        ),
-                        ft.Row(
-                            [
-                                chat_input,
-                                ft.IconButton(
-                                    icon=ft.Icons.SEND,
-                                    icon_color=theme.ACCENT,
-                                    on_click=lambda e: page.run_task(on_send_click, e),
-                                ),
-                            ],
-                            spacing=10,
-                        ),
-                    ],
-                    spacing=14,
-                    expand=True,
-                ),
+                content=body_column,
             ),
         ],
     )

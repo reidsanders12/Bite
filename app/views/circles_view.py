@@ -11,12 +11,17 @@ GOAL_TYPE_LABELS = {
     "workout": "Auto: when I log a workout",
     "calories": "Auto: when I hit a calorie target",
     "steps": "Auto: when I hit a step goal",
+    "water": "Auto: when I hit my water goal",
 }
 GOAL_TYPE_BY_LABEL = {label: key for key, label in GOAL_TYPE_LABELS.items()}
 
-# goal_value's label/target-field text depends on which of these two
+# goal_value's label/target-field text depends on which of these
 # goal_types is selected -- "workout"/"custom" don't use goal_value at all.
-_TARGET_LABELS = {"calories": "Calorie target (kcal)", "steps": "Step target"}
+_TARGET_LABELS = {
+    "calories": "Calorie target (kcal)",
+    "steps": "Step target",
+    "water": "Water target (mL)",
+}
 
 
 def build_circles_view(page: ft.Page, state) -> ft.View:
@@ -311,6 +316,8 @@ def build_circles_view(page: ft.Page, state) -> ft.View:
                 goal_line_parts.append(f"(auto: hits {circle.goal_value or 0} kcal)")
             elif circle.goal_type == "steps":
                 goal_line_parts.append(f"(auto: hits {circle.goal_value or 0:,} steps)")
+            elif circle.goal_type == "water":
+                goal_line_parts.append(f"(auto: hits {circle.goal_value or 0:,}mL water)")
 
             circle_cards.controls.append(
                 theme.surface_card(

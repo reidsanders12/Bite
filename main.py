@@ -65,6 +65,34 @@ VIEW_BUILDERS = {
     "/health": build_health_view,
 }
 
+def _loading_view() -> ft.View:
+    # Shown immediately on every navigation, before route_change's own
+    # refresh_logs/refresh_goals/refresh_profile calls (and whatever the
+    # target view's builder does internally) run -- those are all
+    # synchronous, blocking Supabase round-trips, so without this the
+    # previous screen just sits there unchanged and unresponsive for
+    # however long all of that takes, which reads as the app being frozen/
+    # broken rather than loading. Deliberately minimal (no app bar, no
+    # text) -- it's a screen transition, not a screen.
+    return ft.View(
+        route="/__loading__",
+        bgcolor=theme.BG_CANVAS,
+        controls=[
+            ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Image(src="icon.png", width=72, height=72, border_radius=theme.RADIUS_LG, fit=ft.ImageFit.COVER),
+                        ft.ProgressRing(width=28, height=28, stroke_width=3, color=theme.ACCENT),
+                    ],
+                    spacing=20, alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                alignment=ft.alignment.center,
+                expand=True,
+            ),
+        ],
+    )
+
+
 def main(page: ft.Page):
     page.title = "Bite!"
     page.theme_mode = ft.ThemeMode.LIGHT
@@ -77,6 +105,8 @@ def main(page: ft.Page):
 
     def route_change(e):
             page.views.clear()
+            page.views.append(_loading_view())
+            page.update()
 
             try:
                 if hasattr(state, "refresh_logs"):
@@ -112,13 +142,16 @@ def main(page: ft.Page):
                     builder = build_home_view
 
                 if builder:
-                    page.views.append(builder(page, state))
+                    new_view = builder(page, state)
                 else:
-                    page.views.append(build_home_view(page, state))
-                    
+                    new_view = build_home_view(page, state)
+                page.views.clear()  # drops the loading placeholder
+                page.views.append(new_view)
+
             except Exception:
                 logger.exception("Routing crash while building view for route %r", page.route)
 
+                page.views.clear()  # drops the loading placeholder
                 page.views.append(
                     ft.View(
                         route="/error",

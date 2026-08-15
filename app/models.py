@@ -45,6 +45,11 @@ class MacroBreakdown(BaseModel):
         )
 
 
+class WaterEstimate(BaseModel):
+    amount_ml: int = Field(description="Estimated total volume of water or other hydrating beverage visible in the photo, in milliliters")
+    description: str = Field(description="A short description of the container and fill level identified, e.g. '16oz water bottle, about half full'")
+
+
 class WorkoutEstimate(BaseModel):
     workout_name: str = Field(description="A clean, concise name for the workout")
     duration_minutes: int = Field(description="Estimated duration of the workout in minutes")

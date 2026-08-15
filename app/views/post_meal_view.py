@@ -17,14 +17,22 @@ import flet_native_camera as fnc
 from app import moderation, theme
 from app.ai_engine import AIEngineError, analyze_image
 
-# Placeholder resource -- confirm the exact org/hotline/wording with product
-# before shipping. Shown (not blocking, not shaming) whenever a post's own
-# text trips app/moderation.py's ed_screening_flags(); the post has already
-# been shared and queued for human review by the time this shows.
+# Verified 2026-08-14 against NEDA's own contact info as quoted by two
+# independent secondary sources (Howard University's crisis-resources page
+# and eatingdisorderhope.com's NEDA page) -- nationaleatingdisorders.org
+# itself blocks automated fetches, so this hasn't been checked against the
+# primary source directly. Re-verify before shipping given how much this
+# matters to get right: NEDA's own helpline phone/hours have changed before
+# (a 2023 chatbot controversy briefly replaced the human helpline
+# entirely), so treat this as "best effort, needs a final human check," not
+# settled. The previous placeholder ("call/text 1-800-931-2237") was wrong
+# in a way worth calling out -- texting goes through Crisis Text Line to a
+# different number (741741), not the helpline's own phone number.
 _SUPPORT_RESOURCE_TEXT = (
     "Your post is live. If you're struggling with food or your body image, support is "
-    "available any time -- the National Eating Disorders Association (NEDA) Helpline: "
-    "call/text 1-800-931-2237."
+    "available -- the National Eating Disorders Association (NEDA) Helpline: call "
+    "1-800-931-2237 (Mon-Thu 9am-9pm ET, Fri 9am-5pm ET), or text \"NEDA\" to 741741 "
+    "for 24/7 Crisis Text Line support."
 )
 
 

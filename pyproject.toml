@@ -48,6 +48,10 @@ exclude = [
     ".venv", ".venv-old-0.28.3-backup", ".git", ".github", ".gitignore",
     ".pytest_cache", "__pycache__", ".DS_Store",
     "bite_tracker.db", "kickbacks-v2.vsix", "tests", "scripts",
+    # Static Support URL page (deployed separately to Netlify) -- not part
+    # of the app runtime, would otherwise get needlessly zipped into every
+    # build's app.zip (it's a self-contained 450KB+ HTML file).
+    "support-site",
 ]
 
 # Cross-platform permissions `flet build apk|ipa|macos` should always bake
@@ -79,6 +83,15 @@ dark_color = "#FAF3EA"
 [tool.flet.ios.info]
 NSCameraUsageDescription = "Bite! uses your camera to snap photos of meals for AI calorie/macro estimates, share photos to Meal Feed, take progress photos, and scan barcodes to look up nutrition info."
 NSMicrophoneUsageDescription = "Bite! uses your microphone to record a voice note that's transcribed into a food log entry."
+# App Store Connect's upload validation flagged a missing purpose string
+# even though Bite! never reads/writes the photo library directly -- SystemCamera
+# (app/views/snap_view.py, progress_photos_view.py, post_meal_view.py,
+# water logging in lookup_view.py) uses the `image_picker` plugin's camera
+# source only, but image_picker links photo-library save APIs regardless of
+# which source you actually call, and Apple's validator checks linked
+# binary symbols, not the code path actually taken.
+NSPhotoLibraryAddUsageDescription = "Bite! may save photos you take in the app (meal photos, progress photos) to your camera roll."
+NSPhotoLibraryUsageDescription = "Bite! uses your camera to take photos -- this app does not browse your existing photo library."
 ITSAppUsesNonExemptEncryption = false
 # Profile -> Connect Health App (app/health_engine.py, flet-health). Read-only:
 # Bite! never writes to Apple Health, only displays what's already there.

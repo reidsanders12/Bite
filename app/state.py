@@ -266,9 +266,11 @@ class AppState:
         )
 
     def log_water(self, amount_ml: int) -> None:
-        """Saves a new water entry and refreshes today's cache."""
+        """Saves a new water entry, refreshes today's cache, and
+        auto-checks-in any matching circles."""
         self.db.log_water(amount_ml)
         self.refresh_water_logs_today()
+        self._auto_checkin_circles("water")
 
     def remove_water_log(self, entry_id) -> tuple[bool, str]:
         """Deletes a water entry from the cloud database and the local cache."""
@@ -427,10 +429,11 @@ class AppState:
 
     def _auto_checkin_circles(self, trigger_type: str, value: Optional[int] = None) -> None:
         """Marks today's goal done for any circle whose goal_type matches what
-        was just logged -- a workout, hitting today's calorie target, or (via
-        `value`, e.g. today's Health step count) hitting a step goal -- so
-        members with those goal types never need to tap the check-in button
-        manually. 'custom' circles are untouched; those stay manual.
+        was just logged -- a workout, hitting today's calorie target, hitting
+        today's water target, or (via `value`, e.g. today's Health step
+        count) hitting a step goal -- so members with those goal types never
+        need to tap the check-in button manually. 'custom' circles are
+        untouched; those stay manual.
         """
         self.refresh_circles()
         for circle in self.circles:
@@ -439,6 +442,8 @@ class AppState:
             if trigger_type == "calories" and self.get_daily_totals()["calories"] < (circle.goal_value or 0):
                 continue
             if trigger_type == "steps" and (value or 0) < (circle.goal_value or 0):
+                continue
+            if trigger_type == "water" and self.get_water_total_today_ml() < (circle.goal_value or 0):
                 continue
             self.db.check_in(circle.id)
             self.circle_status_cache.pop(circle.id, None)

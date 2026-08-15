@@ -29,7 +29,7 @@ import httpx
 from pydantic import BaseModel
 
 from app.config import SUPABASE_ANON_KEY, SUPABASE_URL
-from app.models import MacroBreakdown, UserGoals, WorkoutEstimate, MealSuggestion, WorkoutPlan
+from app.models import MacroBreakdown, UserGoals, WorkoutEstimate, MealSuggestion, WorkoutPlan, WaterEstimate
 
 MODEL_NAME = "gemini-2.5-flash"
 
@@ -69,6 +69,24 @@ _AUDIO_INSTRUCTION = (
     "they just ate. Transcribe what they said, identify individual food "
     "items, and produce one aggregated macro breakdown for everything "
     "described. Provide an appropriate descriptive meal_name."
+)
+
+_WATER_SYSTEM_PROMPT = (
+    "You are a precise visual volume-estimation assistant embedded in a "
+    "hydration tracking app. Always respond with your best numeric estimate "
+    "even if you are uncertain -- never refuse and never ask a clarifying "
+    "question. Estimate the volume of water or other hydrating beverage "
+    "(coffee, tea, sports drink, etc.) visible in the photo, in "
+    "milliliters, based on the apparent size of the container (glass, "
+    "bottle, cup, etc.) and how full it is. Use standard container sizes as "
+    "a reference (e.g. a standard drinking glass is roughly 250mL, a "
+    "typical single-serving water bottle is roughly 500mL, a large bottle "
+    "is roughly 1000mL) and scale down for partially-full containers. "
+    "Round to the nearest 10mL."
+)
+
+_WATER_IMAGE_INSTRUCTION = (
+    "Estimate the volume of water/beverage in this photo, in milliliters."
 )
 
 _WORKOUT_SYSTEM_PROMPT = (
@@ -280,6 +298,31 @@ async def analyze_image(photo_bytes: bytes, access_token: str) -> MacroBreakdown
         raise AIEngineError(f"AI photo analysis failed: {exc}") from exc
 
     return _extract(MacroBreakdown, text)
+
+
+async def analyze_water_image(photo_bytes: bytes, access_token: str) -> WaterEstimate:
+    """Send a photo of a glass/bottle/cup to Gemini (via the proxy) for a
+    volume estimate -- same one-shot multimodal pattern as analyze_image,
+    just with a water-focused prompt and a smaller response schema."""
+    b64 = base64.b64encode(photo_bytes).decode("ascii")
+    contents = [{
+        "role": "user",
+        "parts": [
+            {"inlineData": {"mimeType": "image/jpeg", "data": b64}},
+            {"text": _WATER_IMAGE_INSTRUCTION},
+        ],
+    }]
+    try:
+        text = await _call_gemini(
+            access_token, contents, _WATER_SYSTEM_PROMPT, temperature=0.2,
+            response_mime_type="application/json", response_schema_cls=WaterEstimate,
+        )
+    except AIEngineError:
+        raise
+    except Exception as exc:
+        raise AIEngineError(f"AI water photo analysis failed: {exc}") from exc
+
+    return _extract(WaterEstimate, text)
 
 
 async def analyze_audio(audio_bytes: bytes, access_token: str, mime_type: str = "audio/wav") -> MacroBreakdown:

@@ -36,12 +36,27 @@ class FoodApiError(Exception):
 
 @dataclass
 class PackagedProduct:
-    """A barcode-scanned packaged product, with macros per 100g and a serving size hint."""
+    """A barcode-scanned packaged product, with macros per 100g and (when
+    Open Food Facts provides one) a real serving size to scale to instead --
+    per_100g alone made a 500mL bottle log identically to a 100mL sample."""
 
     name: str
     brand: str
     per_100g: MacroBreakdown
     serving_size_g: Optional[float]
+    # e.g. "500 ml" or "1 bottle (500ml)" -- Open Food Facts' own display
+    # string for serving_size_g, shown alongside the scaled macros instead
+    # of re-deriving a label from the raw gram figure.
+    serving_size_label: Optional[str]
+    # per_100g scaled by serving_size_g/100 (see MacroBreakdown.scaled) --
+    # None when Open Food Facts didn't provide a serving size, in which case
+    # callers fall back to per_100g and should say so.
+    per_serving: Optional[MacroBreakdown]
+    # True if Open Food Facts categorizes this as a water product (plain,
+    # spring, mineral, or sparkling) -- lets the Lookup screen offer to log
+    # it to the water tracker (via serving_size_g, treated as mL) instead
+    # of the macro/calorie flow, which is pointless for a ~0-calorie item.
+    is_water: bool = False
 
 
 async def lookup_barcode(barcode: str) -> PackagedProduct:
@@ -76,12 +91,46 @@ async def lookup_barcode(barcode: str) -> PackagedProduct:
     )
     serving_raw = product.get("serving_quantity")
     serving_size_g = float(serving_raw) if serving_raw not in (None, "") else None
+    serving_size_label = product.get("serving_size") or None
+
+    per_serving = None
+    if serving_size_g:
+        factor = serving_size_g / 100.0
+        per_serving = MacroBreakdown(
+            meal_name=macros.meal_name,
+            calories=round(macros.calories * factor),
+            protein=round(macros.protein * factor),
+            carbs=round(macros.carbs * factor),
+            fat=round(macros.fat * factor),
+            identified_items=[
+                FoodItem(
+                    name=product.get("product_name") or "Packaged product",
+                    portion_size=serving_size_label or f"{serving_size_g:.0f}g",
+                )
+            ],
+        )
+
+    # "en:waters"/"en:spring-waters"/"en:mineral-waters"/"en:sparkling-waters"
+    # etc -- substring match rather than an exhaustive tag list, since Open
+    # Food Facts' water taxonomy has many sub-tags and new ones get added.
+    # Falls back to the product name for the (rarer) case where a real water
+    # product is missing category tags -- calorie-gated so a merely
+    # water-flavored/named item with real macros doesn't false-positive.
+    categories_tags = product.get("categories_tags") or []
+    name_lower = (product.get("product_name") or "").lower()
+    is_water = (
+        any(tag.startswith("en:") and "water" in tag for tag in categories_tags)
+        or (macros.calories == 0 and "water" in name_lower)
+    )
 
     return PackagedProduct(
         name=product.get("product_name") or "Unknown product",
         brand=product.get("brands") or "",
         per_100g=macros,
         serving_size_g=serving_size_g,
+        serving_size_label=serving_size_label,
+        per_serving=per_serving,
+        is_water=is_water,
     )
 
 

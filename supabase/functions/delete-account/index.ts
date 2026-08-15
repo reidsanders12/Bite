@@ -5,10 +5,27 @@
 // same reasoning as gemini-proxy holding the real Gemini key server-side.
 // This function checks the caller is a real signed-in user, deletes their
 // rows from every table that references auth.users(id) *without* an
-// `on delete cascade` (profiles and gemini_usage already cascade, see
-// supabase_circles_schema.sql / supabase_gemini_proxy_schema.sql -- this
-// function still deletes everything else explicitly, before deleting the
-// user), then deletes the auth user itself.
+// `on delete cascade` (profiles, gemini_usage, and water_goals already
+// cascade, see supabase_circles_schema.sql / supabase_gemini_proxy_schema.sql
+// -- this function still deletes everything else explicitly, before
+// deleting the user), then deletes the auth user itself.
+//
+// water_logs was added after this function was first written and was
+// missed here -- its user_id FK has no `on delete cascade` either, so any
+// account that had ever logged water failed deleteUser() outright with a
+// foreign-key violation ("Couldn't delete your account. Please try again."
+// on every attempt, with no way around it from the client).
+//
+// moderation_actions.actor_id was missed too, and is a bigger blocker than
+// water_logs in practice: actor_id gets written for ANY authenticated user
+// who reports a post or whose own caption trips the auto-flagger (see the
+// insert policy on moderation_actions in supabase_circles_schema.sql), not
+// just admins -- so most accounts that have ever used Meal Feed hit this.
+// Unlike the other tables, these rows are handled by nulling actor_id
+// rather than deleting the row (see the fix below) -- they're the
+// permanent moderation audit trail, including for content *other* users
+// posted that this account merely reported, so deleting them outright
+// would erase moderation history that isn't this user's to erase.
 //
 // Deploy: supabase functions deploy delete-account
 // No new secrets needed -- reuses the same SUPABASE_URL/SUPABASE_ANON_KEY/
@@ -76,6 +93,7 @@ Deno.serve(async (req) => {
     { table: "circles", column: "created_by" },
     { table: "workout_logs", column: "user_id" },
     { table: "weight_logs", column: "user_id" },
+    { table: "water_logs", column: "user_id" },
     { table: "food_logs", column: "user_id" },
     { table: "user_goals", column: "user_id" },
   ];
@@ -86,6 +104,18 @@ Deno.serve(async (req) => {
       console.error(`[delete-account] cleanup failed on ${step.table}:`, error);
       return jsonResponse({ error: `Couldn't delete account data (${step.table}). Please try again.` }, 500);
     }
+  }
+
+  // moderation_actions.actor_id: null it out instead of deleting the row --
+  // see the module docstring for why (audit trail, not this user's data to
+  // erase). actor_id is nullable specifically to allow this.
+  const { error: modActionsErr } = await admin
+    .from("moderation_actions")
+    .update({ actor_id: null })
+    .eq("actor_id", userId);
+  if (modActionsErr) {
+    console.error("[delete-account] cleanup failed on moderation_actions:", modActionsErr);
+    return jsonResponse({ error: "Couldn't delete account data (moderation_actions). Please try again." }, 500);
   }
 
   // meal-photos Storage objects live under `{userId}/...` (see

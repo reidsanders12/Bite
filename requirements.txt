@@ -39,9 +39,13 @@ websockets==13.0.1
 # swift_getObjectType). flet_health itself is an unofficial community
 # package (its own pubspec points at placeholder repo
 # "MyGithubAccount/flet-health"). The deployment-target patch in
-# scripts/patch_ios_build_workarounds.py (13.0 -> 14.0, which `health`
-# requires) MUST be re-applied after every `flet build ipa` that regenerates
-# build/flutter/ios/, or pod install fails outright. app/health_engine.py's
+# scripts/patch_ios_build_workarounds.py (13.0 -> 15.0 -- 14.0 is the floor
+# `health` itself needs, but App Store Connect's own upload validation
+# separately floors new submissions at 15.0) MUST be re-applied after every
+# `flet build ipa` that regenerates build/flutter/ios/, or pod install fails
+# outright -- use scripts/build_ios.sh instead of calling `flet build ipa`
+# directly, it handles this automatically and verifies the result.
+# app/health_engine.py's
 # HEALTH_AVAILABLE degrade-gracefully path (see its module docstring) is left
 # in place regardless, so a future problem here fails soft instead of
 # breaking app launch again. If this crashes again on-device, pull these two

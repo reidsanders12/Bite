@@ -6,18 +6,22 @@ hardware, twice). Exercises public Open Food Facts API and USDA FoodData
 Central pipelines.
 """
 
+import base64
 import os
 import tempfile
 
 import flet as ft
 import flet_native_camera as fnc
 
+from app import ai_engine
 from app import food_apis
 from app import promotions
 from app import theme
 from app.models import MacroBreakdown
 from app.state import AppState
 from app.views.widgets import error_banner, loading_view
+
+_WATER_QUICK_ADD_ML = [(250, "Glass"), (500, "Bottle"), (1000, "Large Bottle")]
 
 
 def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
@@ -156,6 +160,138 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         page.update()
         await on_barcode_search(None)
 
+    # 3b. Water Logging Pipeline Runtime Hooks -- reuses the same `camera`
+    # (SystemCamera) instance above for the photo-estimate flow, rather than
+    # creating a second one; SystemCamera is one-shot/stateless (just calls
+    # take_picture_async() each time), so sharing it across barcode and
+    # water photo capture is safe and avoids piling up overlay controls.
+    water_amount_field = ft.TextField(
+        label="Custom amount (mL)",
+        keyboard_type=ft.KeyboardType.NUMBER,
+        input_filter=ft.InputFilter(regex_string=r"[0-9]", allow=True, replacement_string=""),
+        **theme.styled_field(),
+    )
+    water_photo_button = theme.primary_button("Snap Photo", icon=ft.Icons.CAMERA_ALT_ROUNDED)
+
+    def _water_logged_banner(amount_ml: int) -> ft.Control:
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED, color=theme.SUCCESS, size=20),
+                    ft.Text(f"Logged {amount_ml:,}mL of water.", size=13, color=theme.TEXT_PRIMARY),
+                ],
+                spacing=8,
+            ),
+            padding=16, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE, border=ft.border.all(1, theme.BORDER),
+        )
+
+    def _water_estimate_card(photo_b64: str, estimate) -> ft.Control:
+        amount_field = ft.TextField(
+            label="Amount (mL)", value=str(estimate.amount_ml),
+            keyboard_type=ft.KeyboardType.NUMBER,
+            input_filter=ft.InputFilter(regex_string=r"[0-9]", allow=True, replacement_string=""),
+            **theme.styled_field(),
+        )
+        status_txt = ft.Text("", size=12)
+
+        async def on_confirm(e):
+            try:
+                amount = int((amount_field.value or "").strip())
+            except ValueError:
+                status_txt.value = "Enter a valid whole number."
+                status_txt.color = theme.ERROR
+                page.update()
+                return
+            if amount <= 0:
+                status_txt.value = "Amount must be greater than zero."
+                status_txt.color = theme.ERROR
+                page.update()
+                return
+            state.log_water(amount)
+            results_area.controls = [_water_logged_banner(amount)]
+            page.update()
+
+        def on_retake(e):
+            results_area.controls = []
+            page.update()
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Image(src_base64=photo_b64, width=72, height=72, fit=ft.ImageFit.COVER, border_radius=theme.RADIUS_SM),
+                            ft.Column(
+                                [
+                                    ft.Text("AI ESTIMATE", size=10, weight="bold", color=theme.TEXT_FAINT),
+                                    ft.Text(estimate.description or "Water", size=13, color=theme.TEXT_MUTED),
+                                ],
+                                expand=True, spacing=2,
+                            ),
+                        ],
+                        spacing=12,
+                    ),
+                    amount_field,
+                    status_txt,
+                    ft.Row(
+                        [
+                            ft.TextButton("Retake", icon=ft.Icons.REPLAY, style=ft.ButtonStyle(color=theme.TEXT_MUTED), on_click=on_retake),
+                            theme.primary_button("Log Water", icon=ft.Icons.CHECK, on_click=lambda e: page.run_task(on_confirm, e)),
+                        ],
+                        alignment=ft.MainAxisAlignment.END, spacing=8,
+                    ),
+                ],
+                spacing=10,
+            ),
+            padding=16, border_radius=theme.RADIUS_MD, bgcolor=theme.BG_SURFACE, border=ft.border.all(1, theme.BORDER),
+        )
+
+    async def on_quick_add_water(amount_ml, e):
+        state.log_water(amount_ml)
+        results_area.controls = [_water_logged_banner(amount_ml)]
+        page.update()
+
+    async def on_add_custom_water(e):
+        try:
+            amount = int((water_amount_field.value or "").strip())
+        except ValueError:
+            results_area.controls = [error_banner("Enter a valid whole number.")]
+            page.update()
+            return
+        if amount <= 0:
+            results_area.controls = [error_banner("Amount must be greater than zero.")]
+            page.update()
+            return
+        state.log_water(amount)
+        water_amount_field.value = ""
+        results_area.controls = [_water_logged_banner(amount)]
+        page.update()
+
+    async def on_water_photo(e):
+        water_photo_button.disabled = True
+        page.update()
+
+        photo_bytes = await camera.take_picture_async()
+        water_photo_button.disabled = False
+        if not photo_bytes:
+            # User backed out of the system camera UI -- on_camera_error
+            # handles actual failures separately.
+            page.update()
+            return
+
+        results_area.controls = [loading_view("Estimating water amount...")]
+        page.update()
+        try:
+            access_token = state.db.get_access_token()
+            estimate = await ai_engine.analyze_water_image(photo_bytes, access_token)
+            photo_b64 = base64.b64encode(photo_bytes).decode("utf-8")
+            results_area.controls = [_water_estimate_card(photo_b64, estimate)]
+        except Exception as exc:
+            results_area.controls = [error_banner(f"Couldn't estimate: {exc}")]
+        page.update()
+
+    water_photo_button.on_click = lambda e: page.run_task(on_water_photo, e)
+
     # 4. Content Block Generation Factory Primitives
     def build_barcode_tab():
         return ft.Column(
@@ -199,6 +335,47 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
             spacing=10,
         )
 
+    def build_water_tab():
+        return ft.Column(
+            [
+                ft.Text("QUICK ADD", size=11, color=theme.TEXT_FAINT, weight="w700"),
+                ft.Row(
+                    [
+                        ft.Container(
+                            content=ft.Column(
+                                [
+                                    ft.Icon(ft.Icons.WATER_DROP_ROUNDED, color=theme.ACCENT, size=20),
+                                    ft.Text(f"+{amount}mL", size=12, weight="w600", color=theme.TEXT_PRIMARY),
+                                    ft.Text(label, size=10, color=theme.TEXT_MUTED),
+                                ],
+                                spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            bgcolor=theme.BG_SURFACE_ALT, border=ft.border.all(1, theme.BORDER),
+                            border_radius=theme.RADIUS_LG, padding=ft.padding.symmetric(10, 12),
+                            on_click=lambda e, amt=amount: page.run_task(on_quick_add_water, amt, e),
+                            expand=True,
+                        )
+                        for amount, label in _WATER_QUICK_ADD_ML
+                    ],
+                    spacing=10,
+                ),
+                ft.Row(
+                    [
+                        ft.Container(water_amount_field, expand=True),
+                        theme.primary_button("Add", icon=ft.Icons.ADD, on_click=lambda e: page.run_task(on_add_custom_water, e)),
+                    ],
+                    spacing=10,
+                ),
+                ft.Divider(color=theme.BORDER, height=20),
+                ft.Text(
+                    "Or snap a photo of your glass or bottle and AI will estimate how much it holds.",
+                    size=12, color=theme.TEXT_MUTED,
+                ),
+                ft.Row([water_photo_button], alignment=ft.MainAxisAlignment.CENTER),
+            ],
+            spacing=10,
+        )
+
     def build_sponsored_tab():
         items = state.get_sponsor_meal_items() if hasattr(state, "get_sponsor_meal_items") else []
         if not items:
@@ -210,11 +387,13 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
 
     tab_barcode_btn = ft.Container(expand=True)
     tab_usda_btn = ft.Container(expand=True)
+    tab_water_btn = ft.Container(expand=True)
     tab_sponsored_btn = ft.Container(expand=True)
 
     tabs = [
         (tab_barcode_btn, build_barcode_tab),
         (tab_usda_btn, build_usda_tab),
+        (tab_water_btn, build_water_tab),
         (tab_sponsored_btn, build_sponsored_tab),
     ]
 
@@ -236,23 +415,40 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
         page.update()
 
     # 5. Component Construction Wiring
-    tab_barcode_btn.content = ft.Row([ft.Text("Barcode Product", weight="bold")], alignment=ft.MainAxisAlignment.CENTER)
-    tab_barcode_btn.padding = 12
+    #
+    # 2x2 grid, not one row of four -- with four tabs (since Water was
+    # added), a single row stayed visibly squished (labels truncating)
+    # even after shortening them and trimming padding/font size. Giving
+    # each tab a full half-row is a durable fix rather than another round
+    # of shrinking text.
+    tab_barcode_btn.content = ft.Row([ft.Text("Barcode", weight="bold", size=13)], alignment=ft.MainAxisAlignment.CENTER)
+    tab_barcode_btn.padding = ft.padding.symmetric(horizontal=8, vertical=10)
     tab_barcode_btn.border_radius = theme.RADIUS_SM
     tab_barcode_btn.on_click = lambda _: switch_tabs(0)
 
-    tab_usda_btn.content = ft.Row([ft.Text("Ingredient Index", weight="bold")], alignment=ft.MainAxisAlignment.CENTER)
-    tab_usda_btn.padding = 12
+    tab_usda_btn.content = ft.Row([ft.Text("Ingredients", weight="bold", size=13)], alignment=ft.MainAxisAlignment.CENTER)
+    tab_usda_btn.padding = ft.padding.symmetric(horizontal=8, vertical=10)
     tab_usda_btn.border_radius = theme.RADIUS_SM
     tab_usda_btn.on_click = lambda _: switch_tabs(1)
 
-    tab_sponsored_btn.content = ft.Row([ft.Text("Sponsored", weight="bold")], alignment=ft.MainAxisAlignment.CENTER)
-    tab_sponsored_btn.padding = 12
+    tab_water_btn.content = ft.Row([ft.Text("Water", weight="bold", size=13)], alignment=ft.MainAxisAlignment.CENTER)
+    tab_water_btn.padding = ft.padding.symmetric(horizontal=8, vertical=10)
+    tab_water_btn.border_radius = theme.RADIUS_SM
+    tab_water_btn.on_click = lambda _: switch_tabs(2)
+
+    tab_sponsored_btn.content = ft.Row([ft.Text("Sponsored", weight="bold", size=13)], alignment=ft.MainAxisAlignment.CENTER)
+    tab_sponsored_btn.padding = ft.padding.symmetric(horizontal=8, vertical=10)
     tab_sponsored_btn.border_radius = theme.RADIUS_SM
-    tab_sponsored_btn.on_click = lambda _: switch_tabs(2)
+    tab_sponsored_btn.on_click = lambda _: switch_tabs(3)
 
     custom_tabs_bar = ft.Container(
-        content=ft.Row([tab_barcode_btn, tab_usda_btn, tab_sponsored_btn], spacing=5),
+        content=ft.Column(
+            [
+                ft.Row([tab_barcode_btn, tab_usda_btn], spacing=4),
+                ft.Row([tab_water_btn, tab_sponsored_btn], spacing=4),
+            ],
+            spacing=4,
+        ),
         bgcolor=theme.BG_SURFACE,
         padding=6,
         border_radius=theme.RADIUS_SM,
@@ -293,29 +489,73 @@ def build_lookup_view(page: ft.Page, state: AppState) -> ft.View:
 # --- ADAPTIVE ITEM VIEW CARDS ---
 
 def _product_card(product, state: AppState, page: ft.Page) -> ft.Control:
+    # Prefer the real serving size (e.g. a 500mL bottle) over the raw
+    # per-100g figures Open Food Facts always provides -- per_serving is
+    # None when OFF didn't give a serving size, in which case this falls
+    # back to per_100g exactly like before, labeled as such.
+    logged_breakdown = product.per_serving or product.per_100g
+
     def on_log(e):
-        state.set_pending(product.per_100g, source="barcode")
+        state.set_pending(logged_breakdown, source="barcode")
         page.go("/confirm")
 
-    subtitle = f"{product.brand} • per 100g: {product.per_100g.calories} kcal" if product.brand else (
-        f"per 100g: {product.per_100g.calories} kcal"
+    status_txt = ft.Text("", size=11, color=theme.SUCCESS, visible=False)
+
+    def on_log_water(e):
+        amount_ml = round(product.serving_size_g) if product.serving_size_g else 250
+        state.log_water(amount_ml)
+        status_txt.value = f"Logged {amount_ml:,}mL of water."
+        status_txt.visible = True
+        page.update()
+
+    if product.per_serving:
+        serving_label = product.serving_size_label or f"{product.serving_size_g:.0f}g"
+        subtitle = (
+            f"{product.brand} • {serving_label}: {logged_breakdown.calories} kcal"
+            if product.brand else
+            f"{serving_label}: {logged_breakdown.calories} kcal"
+        )
+    else:
+        subtitle = f"{product.brand} • per 100g: {product.per_100g.calories} kcal" if product.brand else (
+            f"per 100g: {product.per_100g.calories} kcal"
+        )
+
+    actions = []
+    if product.is_water:
+        actions.append(
+            ft.IconButton(
+                icon=ft.Icons.WATER_DROP_ROUNDED,
+                icon_color=theme.ACCENT,
+                on_click=on_log_water,
+                tooltip="Log as water",
+            )
+        )
+    actions.append(
+        ft.IconButton(
+            icon=ft.Icons.ADD_LINK_ROUNDED,
+            icon_color=theme.ACCENT,
+            on_click=on_log,
+            tooltip="Stage item parameters",
+        )
     )
+
     return ft.Container(
-        content=ft.Row(
+        content=ft.Column(
             [
-                ft.Column(
-                    [ft.Text(product.name.upper(), weight=ft.FontWeight.BOLD, size=14), ft.Text(subtitle, size=12, color=theme.TEXT_MUTED)],
-                    expand=True,
-                    spacing=4
+                ft.Row(
+                    [
+                        ft.Column(
+                            [ft.Text(product.name.upper(), weight=ft.FontWeight.BOLD, size=14), ft.Text(subtitle, size=12, color=theme.TEXT_MUTED)],
+                            expand=True,
+                            spacing=4
+                        ),
+                        ft.Row(actions, spacing=0),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN
                 ),
-                ft.IconButton(
-                    icon=ft.Icons.ADD_LINK_ROUNDED,
-                    icon_color=theme.ACCENT,
-                    on_click=on_log,
-                    tooltip="Stage item parameters"
-                ),
+                status_txt,
             ],
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+            spacing=4,
         ),
         padding=16,
         border_radius=theme.RADIUS_MD,

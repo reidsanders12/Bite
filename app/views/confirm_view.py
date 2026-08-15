@@ -92,13 +92,16 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
         fat_field.value = str(int(base_fat * servings_multiplier))
         page.update()
 
-    # The slider handles fractional steps beautifully (0.1 increments)
+    # The slider handles fractional steps beautifully (0.1 increments), but
+    # its native floating value bubble (the `label` prop below, a built-in
+    # Flutter Slider feature) rounds to whole numbers on-device regardless
+    # of the "{value}" template -- dropped rather than fought, since
+    # slider_label already shows the precise value correctly.
     slider = ft.Slider(
         min=0.1,
         max=5.0,
         divisions=49,
         value=1.0,
-        label="{value}x servings",
         on_change=slider_changed,
         thumb_color=theme.ACCENT,
         active_color=theme.ACCENT

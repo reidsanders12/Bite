@@ -24,13 +24,17 @@ _REPORT_CATEGORIES = [
     ("other", "Other"),
 ]
 
-# Placeholder resource -- confirm the exact org/hotline/wording with product
-# before shipping; see the safety review's Area 1 for why this exists (a
-# lightweight "Get support" link next to reporting, similar to major
-# platforms' self-harm-adjacent content flows).
+# Verified 2026-08-14 -- see the matching comment in post_meal_view.py's
+# own _SUPPORT_RESOURCE_TEXT for sourcing/confidence caveats (best effort,
+# needs a final human check against NEDA's own site before shipping). See
+# also the safety review's Area 1 for why this exists (a lightweight "Get
+# support" link next to reporting, similar to major platforms'
+# self-harm-adjacent content flows).
 _SUPPORT_RESOURCE_TEXT = (
     "If this is about your own relationship with food or your body, you're not alone. "
-    "The National Eating Disorders Association (NEDA) Helpline: call/text 1-800-931-2237."
+    "The National Eating Disorders Association (NEDA) Helpline: call 1-800-931-2237 "
+    "(Mon-Thu 9am-9pm ET, Fri 9am-5pm ET), or text \"NEDA\" to 741741 for 24/7 Crisis "
+    "Text Line support."
 )
 
 

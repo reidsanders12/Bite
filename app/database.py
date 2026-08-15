@@ -5,7 +5,7 @@ Handles multi-user row scoping utilizing authenticated user session identifiers.
 import logging
 import secrets
 import string
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 import httpx
 from supabase import create_client, Client
@@ -834,17 +834,34 @@ class Database:
             logger.error(f"Failed to log water: {e}")
 
     def get_water_logs_for_date(self, date_iso: str) -> List[dict]:
-        """Fetches the caller's water entries created on the given local date."""
+        """Fetches the caller's water entries created on the given local date.
+
+        created_at is a `timestamptz`, and Supabase's session timezone is
+        UTC -- comparing it against a naive "YYYY-MM-DDT00:00:00" string
+        (no offset) makes Postgres interpret that boundary as UTC too. For
+        anyone not in UTC that's the wrong window (e.g. water logged at
+        9pm Pacific is already past midnight UTC, so it either got counted
+        toward the wrong day or dropped out of "today" until the device's
+        local date caught up to it) -- exactly the "doesn't reset like the
+        calorie total does" symptom this was reported as. Anchoring the
+        boundary to the device's current UTC offset instead makes "today"
+        here mean the same local day as `date.today()` on the caller's
+        device.
+        """
         uid = self.get_current_user_id()
         if not uid:
             return []
         try:
+            offset = datetime.now().astimezone().utcoffset() or timedelta(0)
+            local_midnight = datetime.fromisoformat(date_iso)
+            start_utc = local_midnight - offset
+            end_utc = start_utc + timedelta(days=1)
             response = (
                 self.client.table("water_logs")
                 .select("*")
                 .eq("user_id", uid)
-                .gte("created_at", f"{date_iso}T00:00:00")
-                .lte("created_at", f"{date_iso}T23:59:59.999999")
+                .gte("created_at", start_utc.isoformat())
+                .lt("created_at", end_utc.isoformat())
                 .order("id", desc=True)
                 .execute()
             )
