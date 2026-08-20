@@ -24,10 +24,10 @@ if not SUPABASE_URL or not SUPABASE_ANON_KEY:
 SUPABASE_URL = SUPABASE_URL.strip()
 SUPABASE_ANON_KEY = SUPABASE_ANON_KEY.strip()
 
-# 5. Optional: the email address that unlocks the in-app "Sponsor Requests"
-# and "Reported Posts" review screens (Profile -> ...). Left blank, those
-# screens stay hidden for everyone -- this isn't a hard requirement like the
-# keys above.
+# 5. Optional: shown as the "Contact Support" mailto link on the Profile
+# screen. Sponsor/report moderation itself is no longer an in-app admin
+# panel (removed for App Store review 2.3.1(a) -- hidden features aren't
+# allowed in the shipped binary); review those directly in Supabase.
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip().lower()
 
 # Optional: URLs for the hosted privacy_policy.html / account_deletion.html

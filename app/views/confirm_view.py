@@ -56,20 +56,30 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
     )
     subtitle_txt = ft.Text(f"Estimated Base Unit: {serving_desc}", color=theme.TEXT_FAINT, size=12)
 
-    def _numeric_field(value: int, color: str) -> ft.TextField:
+    def _numeric_field(value: int, color: str, width: int | None = 110) -> ft.TextField:
         return ft.TextField(
             value=str(value),
             keyboard_type=ft.KeyboardType.NUMBER,
             text_align=ft.TextAlign.CENTER,
-            width=110,
+            width=width,
             color=color,
             **theme.styled_field(),
         )
 
     calories_field = _numeric_field(base_calories, theme.ACCENT)
-    protein_field = _numeric_field(base_protein, theme.PROTEIN)
-    carbs_field = _numeric_field(base_carbs, theme.CARBS)
-    fat_field = _numeric_field(base_fat, theme.FAT)
+    # Protein/carbs/fat used to all be a fixed 110px wide with 20px gaps
+    # between them (350px + spacing, ~370px total) inside a Row that's
+    # centered but never allowed to shrink -- on any phone narrower than
+    # about 420pt of usable width (i.e. most phones, once the screen's own
+    # 24px-per-side padding is subtracted) that's wider than the available
+    # space, so the row overflowed and the right-most field (fat) got
+    # pushed straight up against, or past, the screen edge. width=None
+    # here + expand=True below lets all three share the row's actual
+    # available width instead of demanding a fixed amount that may not
+    # exist.
+    protein_field = _numeric_field(base_protein, theme.PROTEIN, width=None)
+    carbs_field = _numeric_field(base_carbs, theme.CARBS, width=None)
+    fat_field = _numeric_field(base_fat, theme.FAT, width=None)
 
     status_msg = ft.Text("", color=theme.ACCENT, size=12)
 
@@ -174,18 +184,18 @@ def build_confirm_view(page: ft.Page, state) -> ft.View:
                     ft.Divider(color="transparent", height=10),
                     ft.Row([
                         ft.Column(
-                            [ft.Text("Protein (g)", size=11, color=theme.TEXT_MUTED), protein_field],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4,
+                            [ft.Text("Protein (g)", size=11, color=theme.TEXT_MUTED, text_align=ft.TextAlign.CENTER), protein_field],
+                            horizontal_alignment=ft.CrossAxisAlignment.STRETCH, spacing=4, expand=True,
                         ),
                         ft.Column(
-                            [ft.Text("Carbs (g)", size=11, color=theme.TEXT_MUTED), carbs_field],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4,
+                            [ft.Text("Carbs (g)", size=11, color=theme.TEXT_MUTED, text_align=ft.TextAlign.CENTER), carbs_field],
+                            horizontal_alignment=ft.CrossAxisAlignment.STRETCH, spacing=4, expand=True,
                         ),
                         ft.Column(
-                            [ft.Text("Fat (g)", size=11, color=theme.TEXT_MUTED), fat_field],
-                            horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=4,
+                            [ft.Text("Fat (g)", size=11, color=theme.TEXT_MUTED, text_align=ft.TextAlign.CENTER), fat_field],
+                            horizontal_alignment=ft.CrossAxisAlignment.STRETCH, spacing=4, expand=True,
                         ),
-                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=20),
+                    ], alignment=ft.MainAxisAlignment.CENTER, spacing=12),
 
                     ft.Divider(color="transparent", height=30),
 

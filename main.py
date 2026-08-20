@@ -25,13 +25,11 @@ from app.views.meal_feed_view import build_meal_feed_view
 from app.views.post_meal_view import build_post_meal_view
 from app.views.pr_tracker_view import build_pr_tracker_view
 from app.views.progress_photos_view import build_progress_photos_view
-from app.views.reported_posts_view import build_reported_posts_view
 from app.views.settings_view import build_settings_view
 from app.views.snap_view import build_snap_view
 from app.views.survey_view import build_survey_view
 from app.views.text_log_view import build_text_log_view
 from app.views.profile_view import build_profile_view
-from app.views.sponsor_requests_view import build_sponsor_requests_view
 from app.views.water_view import build_water_view
 from app.views.weight_view import build_weight_view
 from app.views.workout_history_view import build_workout_history_view
@@ -52,8 +50,6 @@ VIEW_BUILDERS = {
     "/progress_photos": build_progress_photos_view,
     "/meal_feed": build_meal_feed_view,
     "/post_meal": build_post_meal_view,
-    "/sponsor_requests": build_sponsor_requests_view,
-    "/reported_posts": build_reported_posts_view,
     "/snap": build_snap_view,
     "/confirm": build_confirm_view,
     "/history": build_history_view,
@@ -118,19 +114,6 @@ def main(page: ft.Page):
 
                 # Dynamically look up and rebuild the requested view layout
                 builder = VIEW_BUILDERS.get(page.route)
-
-                # /sponsor_requests is only ever surfaced via a nav link
-                # that's hidden for non-admins, but the route itself must
-                # also refuse to render for anyone who navigates there
-                # directly (e.g. by URL on web) -- the sponsors_select_owner
-                # RLS policy would just hand back an empty list either way,
-                # but gating the route too means that's belt-and-suspenders
-                # rather than the only thing standing between a random user
-                # and the admin screen.
-                if page.route in ("/sponsor_requests", "/reported_posts") and not (
-                    hasattr(state, "is_admin") and state.is_admin()
-                ):
-                    builder = build_home_view
 
                 # Meal Feed / Post a Meal are gated for known-minor accounts
                 # (app/age_gate.py) -- direct navigation to either route

@@ -6,7 +6,6 @@ import logging
 from datetime import date
 from typing import Any, Optional
 
-from app.config import ADMIN_EMAIL
 from app.database import Database
 from app.models import Circle, LogStreak, UserGoals
 from app import age_gate, moderation
@@ -39,13 +38,11 @@ class AppState:
         self.workout_history: list = []  # full workout history -- workout history screen
         self.weight_history: list = []  # full weight history, oldest first -- weight screen
         self.sponsors: list = []  # active sponsor rows -- home screen promo slot
-        self.sponsor_requests: list = []  # every sponsor row, any status -- admin review screen
         self.sponsor_meal_items: list = []  # Gold sponsors' one-tap meal log options -- lookup screen
         self.sponsor_workout_items: list = []  # Gold sponsors' suggested classes -- log workout screen
         self.meal_feed: list = []  # posts visible to the caller -- meal feed screen
         self.meal_post_like_counts: dict = {}  # post_id -> like count -- meal feed screen
         self.my_liked_post_ids: set = set()  # post ids the caller has liked -- meal feed screen
-        self.reported_posts: list = []  # open reports joined with their post -- admin moderation screen
         self.progress_photos: list = []  # newest first, each with a signed `url` -- progress photos screen
         self.progress_photo_reminder: Optional[dict] = None  # {"remind_at": ...} or None
         self.water_goal_ml: int = 2000  # daily water goal -- water tracker screen + home
@@ -302,70 +299,6 @@ class AppState:
         (main.py) and hides their nav entry points (home_view.py)."""
         return age_gate.can_access_meal_feed(self.profile_data.get("signup_age"))
 
-    def is_admin(self) -> bool:
-        """True if the signed-in user's email matches ADMIN_EMAIL (.env).
-        Unlocks the Sponsor Requests review screen. If ADMIN_EMAIL is unset,
-        this is always False -- the screen stays hidden for everyone."""
-        return bool(ADMIN_EMAIL) and self.current_user_email.strip().lower() == ADMIN_EMAIL
-
-    def refresh_sponsor_requests(self) -> None:
-        """Pulls every sponsor row (any status) for the admin review screen.
-        Only returns anything if the caller passes the sponsors_select_owner
-        RLS check -- non-admins just get an empty list back."""
-        try:
-            self.sponsor_requests = self.db.get_all_sponsors()
-        except Exception as err:
-            logger.error("Sponsor request sync failed: %s", err)
-            self.sponsor_requests = []
-
-    def get_sponsor_requests(self) -> list:
-        """Returns the cached list of every sponsor row (any status)."""
-        return self.sponsor_requests
-
-    def get_sponsor_redemption_stats(self) -> dict:
-        """Per-sponsor redemption usage for the Sponsor Requests screen --
-        see database.get_sponsor_redemption_stats for the shape. Not
-        cached like refresh_sponsor_requests()'s list -- this is only read
-        once per view build, so a fresh fetch each time is simpler than
-        adding another cache to invalidate."""
-        try:
-            return self.db.get_sponsor_redemption_stats()
-        except Exception as err:
-            logger.error("Sponsor redemption stats sync failed: %s", err)
-            return {}
-
-    def approve_sponsor(self, sponsor_id: int) -> tuple[bool, str]:
-        """Approves and activates a pending sponsor request.
-
-        `is_admin()` is checked here too, not just relied on to hide the nav
-        link -- the sponsors_update_owner RLS policy is the real enforcement,
-        this is a redundant app-layer copy of the same rule (defense-in-depth,
-        matching database.py's circle ownership re-checks)."""
-        if not self.is_admin():
-            return False, "Only the admin account can review sponsors."
-        success, err = self.db.update_sponsor_status(sponsor_id, "approved", True)
-        if success:
-            self.refresh_sponsor_requests()
-        return success, err
-
-    def reject_sponsor(self, sponsor_id: int) -> tuple[bool, str]:
-        """Rejects a sponsor request (kept for the record, never shown)."""
-        if not self.is_admin():
-            return False, "Only the admin account can review sponsors."
-        success, err = self.db.update_sponsor_status(sponsor_id, "rejected", False)
-        if success:
-            self.refresh_sponsor_requests()
-        return success, err
-
-    def set_sponsor_active(self, sponsor_id: int, active: bool) -> tuple[bool, str]:
-        """Toggles an already-approved sponsor on/off without re-reviewing it."""
-        if not self.is_admin():
-            return False, "Only the admin account can review sponsors."
-        success, err = self.db.update_sponsor_status(sponsor_id, "approved", active)
-        if success:
-            self.refresh_sponsor_requests()
-        return success, err
-
     # --- SPONSOR MENU ITEMS (Gold-tier native integration) ---
 
     def refresh_sponsor_meal_items(self) -> None:
@@ -393,25 +326,6 @@ class AppState:
     def get_sponsor_workout_items(self) -> list:
         """Returns the cached list of active Gold-sponsor classes."""
         return self.sponsor_workout_items
-
-    def get_sponsor_menu_items_admin(self, sponsor_id: int) -> list:
-        """Every menu item (active or not) for one sponsor, for the admin's
-        Manage Menu dialog. RLS returns empty for non-admins regardless."""
-        if not self.is_admin():
-            return []
-        return self.db.get_sponsor_menu_items_for_admin(sponsor_id)
-
-    def add_sponsor_menu_item(self, sponsor_id: int, item_type: str, name: str, **fields) -> tuple[bool, str]:
-        """Adds one menu item to a sponsor (admin only)."""
-        if not self.is_admin():
-            return False, "Only the admin account can manage sponsor menus."
-        return self.db.add_sponsor_menu_item(sponsor_id, item_type, name, **fields)
-
-    def delete_sponsor_menu_item(self, item_id: int) -> tuple[bool, str]:
-        """Removes a menu item (admin only)."""
-        if not self.is_admin():
-            return False, "Only the admin account can manage sponsor menus."
-        return self.db.delete_sponsor_menu_item(item_id)
 
     def get_or_create_sponsor_redemption(self, sponsor_id: int) -> tuple[Optional[dict], str]:
         """This user's redemption code for a sponsor card's "Redeem" dialog
@@ -655,53 +569,15 @@ class AppState:
         return success, err
 
     def report_meal_post(self, post_id: int, reason: str, category: str = "other") -> tuple[bool, str]:
-        """Flags a post for admin review. Doesn't remove it from the
+        """Flags a post for moderation review. Doesn't remove it from the
         reporter's own feed -- that's what Block is for. A reason is
-        mandatory (also enforced by the DB check constraint) so the admin
-        moderation queue always has something concrete to act on -- see
-        reported_posts_view.py."""
+        mandatory (also enforced by the DB check constraint) so the
+        moderation queue (reviewed directly in Supabase, not in-app) always
+        has something concrete to act on."""
         reason = (reason or "").strip()
         if not reason:
             return False, "Please tell us why you're reporting this post."
         return self.db.report_meal_post(post_id, reason, category)
-
-    def refresh_reported_posts(self) -> None:
-        """Pulls every open report for the admin moderation screen."""
-        try:
-            self.reported_posts = self.db.get_reported_posts()
-        except Exception as err:
-            logger.error("Reported posts sync failed: %s", err)
-            self.reported_posts = []
-
-    def get_reported_posts(self) -> list:
-        """Returns the cached list of open reports."""
-        return self.reported_posts
-
-    def dismiss_report(self, report_id: int) -> tuple[bool, str]:
-        """Resolves a report without deleting the post (admin-only, enforced by RLS)."""
-        if not self.is_admin():
-            return False, "Only the admin account can moderate reports."
-        post_id = next(
-            (r.get("post_id") for r in self.reported_posts if r.get("id") == report_id), None
-        )
-        success, err = self.db.dismiss_report(report_id, post_id=post_id)
-        if success:
-            self.refresh_reported_posts()
-        return success, err
-
-    def admin_remove_meal_post(self, post_id: int) -> tuple[bool, str]:
-        """Deletes a reported post outright (admin-only, enforced by RLS)
-        and refreshes both the moderation queue and the feed cache."""
-        if not self.is_admin():
-            return False, "Only the admin account can moderate posts."
-        success, err = self.db.admin_delete_meal_post(post_id)
-        if success:
-            self.refresh_reported_posts()
-            self.meal_feed = [
-                p for p in self.meal_feed
-                if (p.get("id") if isinstance(p, dict) else getattr(p, "id", None)) != post_id
-            ]
-        return success, err
 
     def post_meal(
         self, photo_bytes: bytes, caption: str, visibility: str = "public", circle_id: Optional[int] = None,

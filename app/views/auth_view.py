@@ -189,7 +189,12 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
                 raise Exception("We couldn't create your account. Please try again.")
 
             if getattr(response, "session", None):
-                # Email confirmation is off for this project - session is live already.
+                # Only happens if email confirmation is off project-wide --
+                # this project keeps it on (see the except block below for
+                # what happens when confirmation email delivery itself is
+                # broken), so in practice this branch is dead but harmless
+                # to keep: if confirmation is ever turned off, signups
+                # should still work without needing a code change here too.
                 status_msg.value = ""
                 await route_after_auth()
             else:
@@ -201,7 +206,23 @@ def build_auth_view(page: ft.Page, state: AppState) -> ft.View:
 
         except Exception as err:
             logger.error("Registration failed: %s", err)
-            status_msg.value = "Registration failed. Please double-check your details and try again."
+            # GoTrue's own signup call fails outright (no account gets
+            # created at all -- confirmed by querying auth.users directly
+            # after triggering this) when it can't deliver the required
+            # confirmation email, e.g. the project's SMTP sender being
+            # misconfigured or rejected by the mail provider. That's a
+            # delivery problem, not something wrong with what the user
+            # typed, so "double-check your details" would be actively
+            # misleading here -- string-matching the message is the best
+            # signal available since GoTrue reports this under the same
+            # generic "unexpected_failure" error code as everything else.
+            if "confirmation email" in str(err).lower() or "sending" in str(err).lower():
+                status_msg.value = (
+                    "We couldn't send a confirmation email right now, so your account wasn't created. "
+                    "Please try again in a few minutes, or contact support if this keeps happening."
+                )
+            else:
+                status_msg.value = "Registration failed. Please double-check your details and try again."
             status_msg.color = theme.ERROR
             page.update()
 

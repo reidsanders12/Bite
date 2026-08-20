@@ -404,18 +404,6 @@ def build_profile_view(page: ft.Page, state) -> ft.View:
                         style=ft.ButtonStyle(color=theme.TEXT_MUTED),
                         on_click=lambda _: page.go("/health")
                     ),
-                    ft.TextButton(
-                        "Sponsor Requests",
-                        icon=ft.Icons.CAMPAIGN_OUTLINED,
-                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
-                        on_click=lambda _: page.go("/sponsor_requests")
-                    ) if hasattr(state, "is_admin") and state.is_admin() else ft.Container(),
-                    ft.TextButton(
-                        "Reported Posts",
-                        icon=ft.Icons.FLAG_OUTLINED,
-                        style=ft.ButtonStyle(color=theme.TEXT_MUTED),
-                        on_click=lambda _: page.go("/reported_posts")
-                    ) if hasattr(state, "is_admin") and state.is_admin() else ft.Container(),
                     ft.Divider(color=theme.BORDER, height=28),
                     ft.TextButton(
                         "Privacy Policy",

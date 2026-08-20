@@ -1312,8 +1312,8 @@ class Database:
         """Files an automated report against the caller's own just-created
         post when app/moderation.py's ed_screening_flags() matches its text
         -- never blocks or deletes the post (see that module's docstring for
-        why), just routes it into the same human-review queue as a user
-        report (reported_posts_view.py). reporter_id is the post's own
+        why), just routes it into the same human-review queue (reviewed
+        directly in Supabase) as a user report. reporter_id is the post's own
         author -- this app has no service-role write path, so the flag has
         to come from whichever authenticated client triggered it, same
         constraint documented on moderation_actions_insert_self in the SQL

@@ -41,8 +41,8 @@ def is_caption_allowed(caption: str) -> bool:
 # own struggle, not content promoting it, and getting that wrong by
 # silently blocking is its own harm. So this only *flags for human review*
 # (see database.py's auto_flag_post / meal_post_reports.is_automated) --
-# the post still goes live, a report row is filed automatically, and the
-# admin queue (reported_posts_view.py) decides from there. This is a small,
+# the post still goes live, a report row is filed automatically, and it's
+# reviewed directly in Supabase from there. This is a small,
 # maintainable keyword list, not a classifier -- it will miss things and
 # will also false-positive on innocuous text (e.g. a dietitian discussing
 # recovery); it's a triage signal for a human, not a verdict.

@@ -603,7 +603,7 @@ def _ingredient_card(breakdown, state: AppState, page: ft.Page) -> ft.Control:
 
 def _sponsor_item_card(item: dict, state: AppState, page: ft.Page) -> ft.Control:
     """A Gold sponsor's menu item -- the "native integration" promise from
-    the sponsor tiers (see sponsor_requests_view.py's Manage Menu dialog).
+    the sponsor tiers (menu items are managed directly in Supabase now).
     Tapping it stages the sponsor's own macro numbers exactly like a
     barcode/USDA hit, one tap into the same Confirm screen."""
     sponsor_name = (item.get("sponsors") or {}).get("title", "Sponsor")
